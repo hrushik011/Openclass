@@ -1,118 +1,102 @@
 import logging
 from datetime import datetime, timezone
+from typing import List, Optional
 
 from ..db import connect, now
-from ..gmail_sender import send_email
+from .notification import NotificationService
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("openclass.reminders")
 
-def check_and_send_assignment_reminders():
-    # 1. Fetch Google credentials from database
-    with connect() as db:
-        row = db.execute("SELECT credentials_json FROM google_credentials WHERE id=1").fetchone()
-        if not row:
-            logger.warning("Google account not connected. Cannot send assignment reminders.")
-            return
-        credentials_json = row["credentials_json"]
 
-    # 2. Fetch all assignments
+def check_and_send_assignment_reminders() -> int:
+    """
+    Scans all assignments, identifies upcoming deadlines for specific batches,
+    and sends automated reminder emails to enrolled students who have not submitted yet.
+    """
+    total_reminders_sent = 0
     with connect() as db:
         assignments = [dict(r) for r in db.execute("SELECT * FROM assignments").fetchall()]
 
+    now_dt = datetime.now(timezone.utc)
+
     for assignment in assignments:
-        deadline_str = assignment["deadline"]
+        deadline_str = assignment.get("deadline")
+        if not deadline_str:
+            continue
+
         try:
-            deadline_dt = datetime.fromisoformat(deadline_str)
-        except (ValueError, TypeError) as e:
-            logger.error(f"Invalid deadline format for assignment {assignment['id']}: {deadline_str}. Error: {e}")
+            deadline_clean = deadline_str.replace("Z", "+00:00")
+            deadline_dt = datetime.fromisoformat(deadline_clean)
+            if deadline_dt.tzinfo is None:
+                deadline_dt = deadline_dt.replace(tzinfo=timezone.utc)
+        except Exception as e:
+            logger.error(f"Invalid deadline format for assignment {assignment.get('id')}: {deadline_str}. {e}")
             continue
 
-        if deadline_dt.tzinfo is None:
-            deadline_dt = deadline_dt.replace(tzinfo=timezone.utc)
+        diff = deadline_dt - now_dt
+        total_hours = diff.total_seconds() / 3600.0
 
-        now_dt = datetime.now(timezone.utc)
-        
-        # Calculate days_remaining = (deadline - now).days
-        days_remaining = (deadline_dt - now_dt).days
-
-        # If days_remaining matches 10, 7, 5, 3, 2, or 1 days
-        if days_remaining not in [10, 7, 5, 3, 2, 1]:
+        if total_hours <= 0:
+            # Deadline has passed
             continue
 
-        batch_id = assignment["batch_id"]
-        assignment_id = assignment["id"]
-        title = assignment["title"]
+        # Determine reminder tier: 2h, 24h, or multi-day
+        reminder_tier = None
+        if total_hours <= 2.5 and total_hours > 0:
+            reminder_tier = "2h"
+        elif total_hours <= 25.0 and total_hours > 20.0:
+            reminder_tier = "24h"
+        elif total_hours <= 73.0 and total_hours > 68.0:
+            reminder_tier = "3d"
+        elif total_hours <= 169.0 and total_hours > 164.0:
+            reminder_tier = "7d"
 
-        # Fetch all students in the batch who have NOT yet submitted this assignment
+        if not reminder_tier:
+            continue
+
+        batch_id = assignment.get("batch_id")
+        assignment_id = assignment.get("id")
+
+        # Fetch enrolled students in this specific batch who have NOT yet submitted
         with connect() as db:
             students = [
-                dict(r) for r in db.execute(
+                dict(r)
+                for r in db.execute(
                     """
-                    SELECT s.id, s.name, s.email FROM students s
-                    WHERE s.batch_id = ? AND s.active = 1
+                    SELECT s.id, s.name, s.email, s.phone FROM students s
+                    WHERE (s.batch_id = ? OR ? LIKE '%' || s.batch_id || '%') AND s.active = 1
                     AND s.id NOT IN (
                         SELECT student_id FROM submissions WHERE assignment_id = ?
                     )
                     """,
-                    (batch_id, assignment_id)
+                    (batch_id, batch_id, assignment_id),
                 ).fetchall()
             ]
 
         for student in students:
-            student_id = student["id"]
-            student_email = student["email"]
-            student_name = student["name"]
+            student_id = str(student.get("id"))
+            student_email = student.get("email")
 
             if not student_email:
                 continue
 
-            # Check if reminder has already been sent to this student for this assignment and days_remaining
+            # Check if reminder already sent for this assignment + student + reminder_tier
             with connect() as db:
-                reminder_logged = db.execute(
+                logged = db.execute(
                     """
                     SELECT 1 FROM assignment_reminder_logs
-                    WHERE assignment_id = ? AND student_id = ? AND days_remaining = ?
+                    WHERE assignment_id = ? AND student_id = ? AND reminder_type = ?
                     """,
-                    (assignment_id, student_id, days_remaining)
+                    (assignment_id, student_id, reminder_tier),
                 ).fetchone()
 
-            if reminder_logged:
+            if logged:
                 continue
 
-            subject = f"Reminder: Submission due for {title} ({days_remaining} day{'s' if days_remaining > 1 else ''} left)"
-            submission_link = f"http://localhost:8000/api/assignments/{assignment_id}/submit"
-            
-            body = (
-                f"Hello {student_name},\n\n"
-                f"This is a reminder that the assignment '{title}' is pending your submission.\n\n"
-                f"Assignment Details:\n"
-                f"- Title: {title}\n"
-                f"- Days Remaining: {days_remaining}\n"
-                f"- Deadline: {deadline_str}\n\n"
-                f"You can upload your submission directly here:\n"
-                f"{submission_link}\n\n"
-                f"Thank you,\n"
-                f"ClassroomFlow System"
-            )
+            # Send reminder email
+            sent = NotificationService.send_assignment_reminder(assignment, student, reminder_tier)
+            if sent:
+                total_reminders_sent += 1
+                logger.info(f"Dispatched {reminder_tier} reminder for assignment {assignment_id} to {student_email}")
 
-            try:
-                msg_id = send_email(credentials_json, student_email, subject, body)
-                stamp = now()
-                with connect() as db:
-                    db.execute(
-                        """
-                        INSERT INTO assignment_reminder_logs (assignment_id, student_id, days_remaining, sent_at)
-                        VALUES (?, ?, ?, ?)
-                        """,
-                        (assignment_id, student_id, days_remaining, stamp)
-                    )
-                    db.execute(
-                        """
-                        INSERT INTO delivery_log(action, status, detail, created_at)
-                        VALUES (?, 'sent', ?, ?)
-                        """,
-                        (f"assignment_reminder_{days_remaining}d", f"Sent to {student_email} (Msg ID: {msg_id})", stamp)
-                    )
-                logger.info(f"Sent reminder for assignment {assignment_id} to student {student_email} (days left: {days_remaining})")
-            except Exception as e:  # noqa: BLE001
-                logger.error(f"Failed to send reminder to student {student_email}: {e}")
+    return total_reminders_sent

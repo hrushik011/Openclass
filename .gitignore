@@ -1,0 +1,21 @@
+# OpenClass — Git ignore rules
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+.env
+*.db
+*.sqlite3
+uploads/
+outputs/
+.DS_Store
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.ruff_cache/
+node_modules/
+.idea/
+.vscode/
+*.log

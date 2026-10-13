@@ -45,13 +45,34 @@ def save_student_submission(assignment_id: int, student_id: str, file: UploadFil
 
     stamp = now()
     with connect() as db:
-        cursor = db.execute(
-            """INSERT INTO submissions (assignment_id, student_id, file_path, original_filename, submitted_at)
-               VALUES (?, ?, ?, ?, ?)
-               ON CONFLICT(assignment_id, student_id) DO UPDATE SET
-               file_path=excluded.file_path, original_filename=excluded.original_filename, submitted_at=excluded.submitted_at""",
-            (assignment_id, str(student_id), str(target_path), original_name, stamp)
-        )
+        # Determine student name
+        student_name = f"Student {student_id}"
+        u_row = db.execute("SELECT name FROM users WHERE id = ?", (student_id,)).fetchone()
+        if u_row and u_row["name"]:
+            student_name = u_row["name"]
+        else:
+            s_row = db.execute("SELECT name FROM students WHERE id = ?", (student_id,)).fetchone()
+            if s_row and s_row["name"]:
+                student_name = s_row["name"]
+
+        existing = db.execute(
+            "SELECT id FROM submissions WHERE assignment_id = ? AND student_id = ?",
+            (assignment_id, str(student_id))
+        ).fetchone()
+
+        if existing:
+            db.execute(
+                """UPDATE submissions SET file_path = ?, original_filename = ?, student_name = ?, submitted_at = ?
+                   WHERE id = ?""",
+                (str(target_path), original_name, student_name, stamp, existing["id"])
+            )
+        else:
+            db.execute(
+                """INSERT INTO submissions (assignment_id, student_id, student_name, file_path, original_filename, submitted_at)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (assignment_id, str(student_id), student_name, str(target_path), original_name, stamp)
+            )
+
         row = db.execute(
             "SELECT * FROM submissions WHERE assignment_id = ? AND student_id = ?",
             (assignment_id, str(student_id))
