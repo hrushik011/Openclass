@@ -14,6 +14,7 @@ cryptography==50.0.1
 # Google APIs (Meet + Gmail + Calendar)
 google-auth==2.57.0
 google-auth-httplib2==0.4.2
+google-auth-oauthlib==1.2.0
 google-api-python-client==2.199.0
 google-api-core==2.34.0
 
