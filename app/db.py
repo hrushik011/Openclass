@@ -140,6 +140,17 @@ CREATE TABLE IF NOT EXISTS delivery_log (
     detail TEXT,
     created_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS lecture_notes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL,
+    subject TEXT NOT NULL,
+    specialization TEXT,
+    file_path TEXT NOT NULL,
+    original_filename TEXT NOT NULL,
+    faculty_name TEXT,
+    created_at TEXT NOT NULL
+);
 """
 
 def now() -> str:

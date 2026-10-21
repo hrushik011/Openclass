@@ -17,6 +17,9 @@
     batches: [],
     people: [],
     submissions: [],
+    notes: [],
+    notesSearch: "",
+    notesSubjectFilter: "All",
     activeModal: null, // "assignment_create" | "assignment_edit" | "assignment_submit" | "submissions_view" | "sudden_class" | "upload_timetable" | "manage_batches" | "thread"
     modalData: null,
     toast: null,
@@ -38,6 +41,51 @@
   if (state.user && state.user.role) {
     const roleUpper = state.user.role.toUpperCase();
     state.role = roleUpper === "FACULTY" ? "faculty" : "student";
+  }
+
+  function cleanSubjectName(raw) {
+    if (!raw) return "";
+    return String(raw)
+      .replace(/\s+(CS-[0-9][A-Z0-9]*|[A-Z]{2,3}-[0-9][A-Z0-9]*)$/i, "")
+      .trim() || String(raw).trim();
+  }
+
+  function uniqueSubjectList(items = []) {
+    const seen = new Set();
+    const options = [];
+    (items || []).forEach((label) => {
+      const value = String(label || "").trim();
+      if (!value) return;
+      const key = value.toLowerCase();
+      if (seen.has(key)) return;
+      seen.add(key);
+      options.push(value);
+    });
+    return options;
+  }
+
+  function getClassesSubjects() {
+    const seen = new Set();
+    const subjects = [];
+    (state.classes || []).forEach((c) => {
+      const raw = String(c.subject || "").trim();
+      if (!raw) return;
+      const cleaned = cleanSubjectName(raw);
+      const key = cleaned.toLowerCase();
+      if (!seen.has(key)) {
+        seen.add(key);
+        subjects.push(cleaned);
+      }
+    });
+    return subjects;
+  }
+
+  function facultyNoteSubjects() {
+    const extras = [];
+    (state.classes || []).forEach((item) => extras.push(cleanSubjectName(item.subject)));
+    (state.assignments || []).forEach((item) => extras.push(cleanSubjectName(item.subject)));
+    (state.notes || []).forEach((item) => extras.push(cleanSubjectName(item.subject)));
+    return uniqueSubjectList(extras);
   }
 
   // --- Microsoft OIDC JWT Handoff ---
@@ -213,6 +261,9 @@
       state.batches = [];
       state.people = [];
       state.submissions = [];
+      state.notes = [];
+      state.notesSearch = "";
+      state.notesSubjectFilter = "All";
       state.activeModal = null;
       state.modalData = null;
       state.loginError = "";
@@ -236,12 +287,12 @@
             .replace(/^ +/, "")
             .replace(/=.*/, "=;expires=" + new Date().toUTCString() + ";path=/");
         });
-      } catch {}
+      } catch { }
 
       // Reset URL to clean base path
       try {
         window.history.replaceState({}, document.title, window.location.pathname);
-      } catch {}
+      } catch { }
 
       showToast("Signed out successfully from OpenClass.");
       render();
@@ -250,16 +301,18 @@
     async loadDashboardData() {
       if (!state.token) return;
       try {
-        const [clsRes, assignRes, batchRes, peopleRes] = await Promise.all([
+        const [clsRes, assignRes, batchRes, peopleRes, notesRes] = await Promise.all([
           fetch("/api/classes", { headers: api.headers() }),
           fetch("/api/assignments", { headers: api.headers() }),
           fetch("/api/batches", { headers: api.headers() }),
-          fetch("/api/people", { headers: api.headers() })
+          fetch("/api/people", { headers: api.headers() }),
+          fetch("/api/notes", { headers: api.headers() })
         ]);
         if (clsRes.ok) state.classes = await clsRes.json();
         if (assignRes.ok) state.assignments = await assignRes.json();
         if (batchRes.ok) state.batches = await batchRes.json();
         if (peopleRes.ok) state.people = await peopleRes.json();
+        if (notesRes && notesRes.ok) state.notes = await notesRes.json();
       } catch (e) {
         console.error("Data fetch error", e);
       }
@@ -476,6 +529,434 @@
     }
   }
 
+  async function handleUploadNotes(event) {
+    event.preventDefault();
+    const form = event.target;
+    if (!form) return;
+
+    const formData = new FormData(form);
+    const title = String(formData.get("title") || "").trim();
+    const subject = String(formData.get("subject") || "").trim();
+    const file = formData.get("file");
+
+    if (!title || !subject || !(file instanceof File) || !file.name) {
+      showToast("Please provide a title, subject, and file.");
+      return;
+    }
+
+    const specialization = String(formData.get("specialization") || "").trim();
+    if (!specialization) {
+      formData.delete("specialization");
+    }
+
+    state.loading = true;
+    render();
+    try {
+      const res = await fetch("/api/faculty/notes", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${state.token}`
+        },
+        body: formData
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || "Failed to upload lecture notes");
+      const queued = data.emails_queued != null ? data.emails_queued : 0;
+      showToast(`Lecture notes "${data.title || title}" posted · ${queued} student email(s) queued`);
+    } catch (e) {
+      showToast(`Error: ${e.message}`);
+    } finally {
+      state.loading = false;
+      render();
+    }
+  }
+
+  function ensureNotesFilterStyles() {
+    if (document.getElementById("notes-filter-styles")) return;
+    const style = document.createElement("style");
+    style.id = "notes-filter-styles";
+    style.textContent = `
+      .notes-filter-bar {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        margin: 2px 0 16px;
+        padding: 14px 16px;
+        border-radius: 14px;
+        background: rgba(255, 255, 255, 0.025);
+        border: 1px solid rgba(147, 133, 204, 0.16);
+      }
+      .notes-search-wrap {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 9px 14px;
+        border-radius: 10px;
+        background: rgba(18, 17, 30, 0.65);
+        border: 1px solid rgba(147, 133, 204, 0.18);
+        transition: border-color 0.15s, box-shadow 0.15s;
+      }
+      .notes-search-wrap:focus-within {
+        border-color: rgba(167, 139, 250, 0.6);
+        box-shadow: 0 0 0 3px rgba(167, 139, 250, 0.15);
+      }
+      .notes-search-wrap svg { opacity: 0.6; flex-shrink: 0; }
+      #notes-search-input {
+        flex: 1;
+        background: transparent;
+        border: 0;
+        outline: none;
+        color: #f4f1ff;
+        font-size: 13px;
+        font-family: inherit;
+      }
+      #notes-search-input::placeholder { color: #8e87a2; }
+      #notes-subject-filters {
+        display: flex;
+        gap: 7px;
+        overflow-x: auto;
+        scrollbar-width: none;
+        padding-bottom: 2px;
+      }
+      #notes-subject-filters::-webkit-scrollbar { display: none; }
+      .notes-subject-pill {
+        flex-shrink: 0;
+        border: 1px solid rgba(147, 133, 204, 0.22);
+        background: rgba(255, 255, 255, 0.02);
+        color: #b3aec5;
+        border-radius: 999px;
+        padding: 6px 14px;
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.01em;
+        cursor: pointer;
+        font-family: inherit;
+        transition: all 0.15s ease;
+      }
+      .notes-subject-pill:hover {
+        color: #f4f1ff;
+        border-color: rgba(167, 139, 250, 0.45);
+        background: rgba(167, 139, 250, 0.08);
+      }
+      .notes-subject-pill.active {
+        background: rgba(167, 139, 250, 0.22);
+        border-color: rgba(167, 139, 250, 0.6);
+        color: #ffffff;
+        box-shadow: 0 2px 10px rgba(167, 139, 250, 0.2);
+      }
+      .knowledge-hub-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
+        gap: 16px;
+        margin-top: 16px;
+      }
+      .hub-resource-card {
+        background: linear-gradient(145deg, rgba(31, 29, 47, 0.75), rgba(20, 19, 31, 0.88));
+        border: 1px solid rgba(147, 133, 204, 0.16);
+        border-radius: 14px;
+        padding: 18px 20px;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        min-height: 195px;
+        transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+      }
+      .hub-resource-card:hover {
+        transform: translateY(-2px);
+        border-color: rgba(167, 139, 250, 0.45);
+        box-shadow: 0 12px 30px rgba(0, 0, 0, 0.4), 0 0 18px rgba(167, 139, 250, 0.12);
+      }
+      .hub-card-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+      }
+      .hub-file-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        padding: 3px 8px;
+        border-radius: 6px;
+        font-size: 9px;
+        font-weight: 700;
+        font-family: var(--app-font-mono);
+        letter-spacing: 0.05em;
+      }
+      .hub-card-body {
+        margin: 12px 0 14px;
+        flex: 1;
+      }
+      .hub-card-title {
+        font-size: 13px;
+        font-weight: 700;
+        color: #f4f1ff;
+        margin: 0 0 6px;
+        line-height: 1.35;
+      }
+      .hub-card-filename {
+        font-size: 10px;
+        color: #9d94bf;
+        font-family: var(--app-font-mono);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        display: flex;
+        align-items: center;
+        gap: 5px;
+        margin-bottom: 8px;
+        opacity: 0.85;
+      }
+      .hub-card-meta {
+        font-size: 10px;
+        color: #8e87a2;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+      }
+      .hub-meta-item {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+      }
+      .hub-card-footer {
+        border-top: 1px solid rgba(147, 133, 204, 0.12);
+        padding-top: 12px;
+        margin-top: auto;
+      }
+      .hub-download-btn {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        width: 100%;
+        padding: 8px 12px;
+        border-radius: 8px;
+        background: rgba(167, 139, 250, 0.12);
+        border: 1px solid rgba(167, 139, 250, 0.28);
+        color: #dcd4ff;
+        font-size: 10px;
+        font-weight: 700;
+        text-decoration: none;
+        cursor: pointer;
+        transition: all 0.15s ease;
+      }
+      .hub-download-btn:hover {
+        background: linear-gradient(135deg, #795bd0, #5c48b2);
+        border-color: #a78bfa;
+        color: #ffffff;
+        box-shadow: 0 4px 14px rgba(121, 91, 208, 0.4);
+      }
+    `;
+    document.head.appendChild(style);
+  }
+
+  function getFileBadgeInfo(filename) {
+    const ext = String(filename || "").split(".").pop().toLowerCase();
+    if (ext === "pdf") {
+      return { label: "PDF", color: "#ff8b7b", bg: "rgba(255, 107, 107, 0.15)", border: "rgba(255, 107, 107, 0.3)" };
+    } else if (ext === "pptx" || ext === "ppt") {
+      return { label: "SLIDES", color: "#fca34d", bg: "rgba(252, 163, 77, 0.15)", border: "rgba(252, 163, 77, 0.3)" };
+    } else if (ext === "xlsx" || ext === "xls" || ext === "csv") {
+      return { label: "SHEET", color: "#61d7da", bg: "rgba(97, 215, 218, 0.15)", border: "rgba(97, 215, 218, 0.3)" };
+    } else if (ext === "docx" || ext === "doc") {
+      return { label: "DOC", color: "#a78bfa", bg: "rgba(167, 139, 250, 0.15)", border: "rgba(167, 139, 250, 0.3)" };
+    } else {
+      return { label: "RESOURCE", color: "#a78bfa", bg: "rgba(167, 139, 250, 0.15)", border: "rgba(167, 139, 250, 0.3)" };
+    }
+  }
+
+  function notesSubjectOptions() {
+    return ["All"].concat(getClassesSubjects());
+  }
+
+  function renderNotesSubjectPills() {
+    const row = document.getElementById("notes-subject-filters");
+    if (!row) return;
+    const active = state.notesSubjectFilter || "All";
+    row.innerHTML = notesSubjectOptions().map((subject) => {
+      const isActive = subject.toLowerCase() === String(active).toLowerCase();
+      return `<button type="button" class="notes-subject-pill${isActive ? " active" : ""}" data-subject="${subject}">${subject}</button>`;
+    }).join("");
+  }
+
+  function filteredStudentNotes() {
+    const query = String(state.notesSearch || "").trim().toLowerCase();
+    const subjectFilter = String(state.notesSubjectFilter || "All");
+    return (state.notes || []).filter((note) => {
+      const title = String(note.title || "").toLowerCase();
+      const filename = String(note.original_filename || "").toLowerCase();
+      const faculty = String(note.faculty_name || "").toLowerCase();
+      const spec = String(note.specialization || "").toLowerCase();
+      const matchesQuery = !query || title.includes(query) || filename.includes(query) || faculty.includes(query) || spec.includes(query);
+
+      const noteSubject = String(note.subject || "").toLowerCase();
+      const targetSubject = subjectFilter.toLowerCase();
+      const matchesSubject =
+        !subjectFilter ||
+        targetSubject === "all" ||
+        noteSubject === targetSubject ||
+        (targetSubject === "investments" && (noteSubject.includes("investment") || title.includes("invest"))) ||
+        noteSubject.includes(targetSubject);
+
+      return matchesQuery && matchesSubject;
+    });
+  }
+
+  function renderNotesGridContent(notes) {
+    if (!(state.notes || []).length) {
+      return `
+        <div class="panel" style="grid-column: 1 / -1; padding: 48px 24px; text-align: center; color: #8e87a2;">
+          <div style="display: inline-flex; align-items: center; justify-content: center; width: 48px; height: 48px; border-radius: 50%; background: rgba(167, 139, 250, 0.12); color: #a78bfa; margin-bottom: 12px;">
+            ${getIcon("hub", 24)}
+          </div>
+          <h3 style="color: #f4f1ff; font-size: 14px; margin-bottom: 6px;">Course Repository is Empty</h3>
+          <p style="font-size: 11px; max-width: 420px; margin: 0 auto;">No lecture notes or course resources have been uploaded to the repository yet.</p>
+        </div>
+      `;
+    }
+
+    if (!notes.length) {
+      return `
+        <div class="panel" style="grid-column: 1 / -1; padding: 48px 24px; text-align: center; color: #8e87a2;">
+          <div style="display: inline-flex; align-items: center; justify-content: center; width: 48px; height: 48px; border-radius: 50%; background: rgba(255, 107, 107, 0.1); color: #ff8b7b; margin-bottom: 12px;">
+            ${getIcon("search", 24)}
+          </div>
+          <h3 style="color: #f4f1ff; font-size: 14px; margin-bottom: 6px;">No Matching Resources</h3>
+          <p style="font-size: 11px; max-width: 420px; margin: 0 auto;">No documents match "${state.notesSearch || state.notesSubjectFilter}". Try adjusting your search query or subject filter.</p>
+          <div style="margin-top: 14px;">
+            <button type="button" class="secondary-btn" id="btn-reset-notes-filter">Reset Filters</button>
+          </div>
+        </div>
+      `;
+    }
+
+    return notes.map((note) => {
+      const fileName = note.original_filename || "Download resource";
+      const faculty = note.faculty_name || "Course Lead";
+      const spec = note.specialization ? `Batch ${note.specialization}` : "All Batches";
+      const posted = note.created_at ? formatDeadline(note.created_at) : "";
+      const href = `/api/notes/${note.id}/file`;
+      const badge = getFileBadgeInfo(fileName);
+
+      return `
+        <article class="hub-resource-card">
+          <div class="hub-card-header">
+            <div class="hub-file-badge" style="background: ${badge.bg}; color: ${badge.color}; border: 1px solid ${badge.border};">
+              ${getIcon("fileText", 12)}
+              <span>${badge.label}</span>
+            </div>
+            <span class="status-pill">${note.subject || "Coursework"}</span>
+          </div>
+
+          <div class="hub-card-body">
+            <h3 class="hub-card-title" title="${note.title || "Lecture notes"}">${note.title || "Lecture notes"}</h3>
+            <div class="hub-card-filename" title="${fileName}">
+              ${getIcon("fileText", 11)} <span>${fileName}</span>
+            </div>
+            <div class="hub-card-meta">
+              <span class="hub-meta-item">${getIcon("people", 11)} ${faculty}</span>
+              <span class="hub-meta-item">${getIcon("sparkles", 10)} ${spec}</span>
+              ${posted ? `<span class="hub-meta-item">${getIcon("clock", 10)} ${posted}</span>` : ""}
+            </div>
+          </div>
+
+          <div class="hub-card-footer">
+            <a class="hub-download-btn" href="${href}" download="${fileName}" title="Download ${fileName}">
+              ${getIcon("download", 13)}
+              <span>Download Resource</span>
+            </a>
+          </div>
+        </article>
+      `;
+    }).join("");
+  }
+
+  function renderFilteredStudentNotes() {
+    const container = document.getElementById("student-notes-container");
+    if (!container) return;
+    const notes = filteredStudentNotes();
+    container.innerHTML = renderNotesGridContent(notes);
+
+    const countEl = document.querySelector(".hub-results-count");
+    if (countEl) {
+      countEl.innerHTML = `Showing <strong>${notes.length}</strong> of <strong>${(state.notes || []).length}</strong> resources`;
+    }
+
+    const resetBtn = document.getElementById("btn-reset-notes-filter");
+    if (resetBtn) {
+      resetBtn.addEventListener("click", () => {
+        state.notesSearch = "";
+        state.notesSubjectFilter = "All";
+        const searchInput = document.getElementById("notes-search-input");
+        if (searchInput) searchInput.value = "";
+        renderNotesSubjectPills();
+        renderFilteredStudentNotes();
+      });
+    }
+  }
+
+  function bindNotesFilterBar() {
+    ensureNotesFilterStyles();
+    const search = document.getElementById("notes-search-input");
+    const pills = document.getElementById("notes-subject-filters");
+    const clearBtn = document.getElementById("btn-clear-notes-search");
+
+    if (search) {
+      search.value = state.notesSearch || "";
+      search.addEventListener("input", () => {
+        state.notesSearch = search.value;
+        renderFilteredStudentNotes();
+      });
+    }
+    if (clearBtn) {
+      clearBtn.addEventListener("click", () => {
+        state.notesSearch = "";
+        if (search) search.value = "";
+        renderFilteredStudentNotes();
+      });
+    }
+    if (pills) {
+      pills.addEventListener("click", (event) => {
+        const btn = event.target.closest(".notes-subject-pill");
+        if (!btn) return;
+        state.notesSubjectFilter = btn.dataset.subject || "All";
+        pills.querySelectorAll(".notes-subject-pill").forEach((pill) => {
+          pill.classList.toggle("active", pill === btn);
+        });
+        renderFilteredStudentNotes();
+      });
+    }
+  }
+
+  async function loadStudentNotes(subject, specialization) {
+    const container = document.getElementById("student-notes-container");
+    if (!container) return;
+
+    ensureNotesFilterStyles();
+    if (subject) state.notesSubjectFilter = subject;
+
+    const params = new URLSearchParams();
+    if (specialization) params.set("specialization", specialization);
+    const query = params.toString();
+
+    try {
+      const res = await fetch(query ? `/api/notes?${query}` : "/api/notes", {
+        headers: api.headers()
+      });
+      if (!res.ok) throw new Error("Could not load lecture notes");
+      state.notes = await res.json();
+      renderNotesSubjectPills();
+      renderFilteredStudentNotes();
+    } catch (e) {
+      if (container) {
+        container.innerHTML = `<p style="font-size: 11px; color: #ff8b7b;">Could not load lecture notes.</p>`;
+      }
+      console.error(e);
+    }
+  }
+
   // --- Render System ---
   function render() {
     const root = document.getElementById("app");
@@ -664,23 +1145,24 @@
 
     const navItems = isFaculty
       ? [
-          { label: "Dashboard", icon: "dashboard" },
-          { label: "Timetable & Attendance", icon: "calendar" },
-          { label: "Assignments & Sessions", icon: "assignment" },
-          { label: "Class Threads", icon: "threads" },
-          { label: "People", icon: "people" }
-        ]
+        { label: "Dashboard", icon: "dashboard" },
+        { label: "Timetable & Attendance", icon: "calendar" },
+        { label: "Assignments & Sessions", icon: "assignment" },
+        { label: "Class Threads", icon: "threads" },
+        { label: "Knowledge Hub", id: "knowledge-hub", icon: "hub" },
+        { label: "People", icon: "people" }
+      ]
       : [
-          { label: "Dashboard", icon: "dashboard" },
-          { label: "My Timetable", icon: "calendar" },
-          { label: "Assignments", icon: "assignment" },
-          { label: "Class Threads", icon: "threads" },
-          { label: "Knowledge Hub", icon: "hub" },
-          { label: "People", icon: "people" }
-        ];
+        { label: "Dashboard", icon: "dashboard" },
+        { label: "My Timetable", icon: "calendar" },
+        { label: "Assignments", icon: "assignment" },
+        { label: "Class Threads", icon: "threads" },
+        { label: "Knowledge Hub", id: "knowledge-hub", icon: "hub" },
+        { label: "People", icon: "people" }
+      ];
 
     // Ensure valid currentTab for role
-    const validTabs = navItems.map((n) => n.label);
+    const validTabs = ["Dashboard", "My Timetable", "Timetable & Attendance", "Assignments", "Assignments & Sessions", "Class Threads", "People", "Knowledge Hub", "knowledge-hub"];
     if (!validTabs.includes(state.currentTab) && state.currentTab !== "Workspace Settings") {
       state.currentTab = "Dashboard";
     }
@@ -698,15 +1180,22 @@
           <div class="nav-label">Workspace</div>
           <nav class="nav-list" aria-label="workspace navigation">
             ${navItems
-              .map(
-                (item) => `
-              <button class="nav-item ${state.currentTab === item.label ? "active" : ""}" data-tab="${item.label}">
-                ${getIcon(item.icon, 16)}
-                <span>${item.label}</span>
-              </button>
-            `
-              )
-              .join("")}
+        .map(
+          (item) => {
+            const tabKey = item.id || item.label;
+            const isActive =
+              state.currentTab === item.label ||
+              state.currentTab === tabKey ||
+              (item.label === "Knowledge Hub" && (state.currentTab === "knowledge-hub" || state.currentTab === "Knowledge Hub"));
+            return `
+                    <button class="nav-item ${isActive ? "active" : ""}" data-tab="${tabKey}">
+                      ${getIcon(item.icon, 16)}
+                      <span>${item.label}</span>
+                    </button>
+                  `;
+          }
+        )
+        .join("")}
           </nav>
 
           <div style="margin-top: 26px;" class="nav-label">System</div>
@@ -739,7 +1228,7 @@
               <div class="breadcrumb">
                 <span>Workspace</span>
                 <span style="opacity: 0.4;">/</span>
-                <strong>${state.currentTab}</strong>
+                <strong>${state.currentTab === "knowledge-hub" || state.currentTab === "Knowledge Hub" ? "Knowledge Hub" : state.currentTab}</strong>
               </div>
             </div>
 
@@ -838,6 +1327,10 @@
         return renderPeopleView();
       case "Class Threads":
         return renderThreadsView();
+      case "Knowledge Hub":
+      case "knowledge-hub":
+      case "Knowledge-Hub":
+        return renderKnowledgeHub();
       default:
         return isActualFaculty && state.role === "faculty"
           ? renderFacultyDashboard()
@@ -918,7 +1411,7 @@
                 <button class="quick-action compact-action" id="btn-quick-new-assignment">
                   ${getIcon("plus", 14)}
                   <div>
-                    <strong>Upload assignment portal</strong>
+                    <strong>Upload assignment </strong>
                     <span>Set deadline, batch, and auto-dispatch email alert.</span>
                   </div>
                 </button>
@@ -966,6 +1459,46 @@
             </div>
           </div>
         </section>
+
+        <section class="panel faculty-overview" style="margin-top: 18px;">
+          <div class="panel-head">
+            <div class="panel-title">${getIcon("fileText", 15)} Lecture Notes</div>
+            <span class="panel-meta">Notify enrolled students on upload</span>
+          </div>
+          <form id="upload-notes-form" class="management-body" style="display: grid; gap: 10px;">
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+              <div>
+                <label class="field-label" for="notes-title">Title</label>
+                <input id="notes-title" name="title" class="field-input" required placeholder="e.g. Graph Traversal lecture notes" />
+              </div>
+              <div>
+                <label class="field-label" for="note-subject">Subject</label>
+                <select id="note-subject" name="subject" class="field-input" required>
+                  ${facultyNoteSubjects().map((subject) => `
+                    <option value="${subject}" ${subject === "Data Structures" ? "selected" : ""}>${subject}</option>
+                  `).join("")}
+                </select>
+              </div>
+            </div>
+            <div>
+              <label class="field-label" for="notes-specialization">Specialization <span style="opacity: 0.5;">(optional)</span></label>
+              <input id="notes-specialization" name="specialization" class="field-input" placeholder="e.g. CS-2A or AI" />
+            </div>
+            <div>
+              <label class="field-label" for="notes-file">File attachment</label>
+              <input id="notes-file" name="file" class="field-input" type="file" required />
+            </div>
+            <div style="background: rgba(167, 139, 250, 0.1); border: 1px solid rgba(167, 139, 250, 0.2); border-radius: 8px; padding: 10px 12px; font-size: 10px; color: #cfc2ff; display: flex; align-items: center; gap: 8px;">
+              ${getIcon("shield", 14)}
+              <span>Students enrolled in this subject across batches will receive an email when notes are posted.</span>
+            </div>
+            <div style="display: flex; justify-content: flex-end;">
+              <button type="submit" class="primary-btn" ${state.loading ? "disabled" : ""}>
+                ${state.loading ? `<span class="spinner"></span>` : `${getIcon("upload", 13)} Upload notes & notify`}
+              </button>
+            </div>
+          </form>
+        </section>
       </div>
     `;
   }
@@ -980,6 +1513,9 @@
       faculty_name: "Professor Iyer",
       google_meet_url: "https://meet.google.com/dks-pqnr-kty"
     };
+
+    const allAssignments = state.assignments || [];
+    const pendingAssignments = allAssignments.filter((a) => !a.has_submitted);
 
     return `
       <div class="student-view">
@@ -1016,7 +1552,7 @@
           <section class="panel graph-panel">
             <div class="panel-head">
               <div class="panel-title">${getIcon("hub", 15)} Knowledge Graph</div>
-              <button class="muted-btn">Explore ${getIcon("arrowRight", 12)}</button>
+              <button class="muted-btn" data-action="open-knowledge-hub" data-tab="knowledge-hub">Explore ${getIcon("arrowRight", 12)}</button>
             </div>
             <div class="graph-wrap">
               <svg class="graph-lines" viewBox="0 0 600 330" preserveAspectRatio="none" aria-hidden="true">
@@ -1068,6 +1604,112 @@
             </section>
           </div>
         </div>
+
+        <!-- Pending Assignments & Action Items Feed -->
+        <section class="panel feed-panel" style="margin-top: 18px;">
+          <div class="panel-head">
+            <div class="panel-title">${getIcon("assignment", 15)} Pending Assignments & Action Items</div>
+            <span class="panel-meta">${pendingAssignments.length} actionable item${pendingAssignments.length === 1 ? "" : "s"}</span>
+          </div>
+          <div class="pending-feed-list" style="padding: 6px 20px 16px;">
+            ${pendingAssignments.length > 0 ? pendingAssignments.map((a) => {
+      const isUrgent = a.hours_remaining && a.hours_remaining <= 24;
+      return `
+                <div class="assignment-row" style="display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 12px 0; border-bottom: 1px solid rgba(147, 133, 204, 0.12);">
+                  <div style="display: flex; align-items: center; gap: 12px; min-width: 0; flex: 1;">
+                    <div class="assignment-mark" style="color: ${isUrgent ? "#ff8b7b" : "#a78bfa"}; background: ${isUrgent ? "rgba(255, 107, 107, 0.15)" : "rgba(167, 139, 250, 0.15)"}; flex-shrink: 0;">
+                      ${getIcon(isUrgent ? "clock" : "assignment", 14)}
+                    </div>
+                    <div class="management-copy" style="min-width: 0; flex: 1;">
+                      <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+                        <strong style="color: #f4f1ff; font-size: 12px; font-weight: 700;">${a.title}</strong>
+                        <span class="status-pill" style="font-size: 8px;">${a.subject || "Coursework"}</span>
+                        ${isUrgent ? `<span class="deadline-badge deadline-urgent" style="font-size: 8px;">${getIcon("clock", 10)} Due in ${Math.round(a.hours_remaining)}h</span>` : ""}
+                      </div>
+                      <span style="font-size: 10px; color: #8e87a2; margin-top: 3px; display: block;">
+                        <strong>Deadline:</strong> ${formatDeadline(a.deadline)} · Faculty: ${a.faculty_name || "Course Lead"} · Batch: ${a.batch_id || user.batch_id || "CS-2A"}
+                      </span>
+                    </div>
+                  </div>
+                  <div style="flex-shrink: 0;">
+                    <button class="mini-btn primary" data-action="submit-assignment" data-id="${a.id}">
+                      ${getIcon("upload", 12)} Submit Work
+                    </button>
+                  </div>
+                </div>
+              `;
+    }).join("") : `
+              <div style="padding: 28px 16px; text-align: center; color: #8e87a2;">
+                <div style="display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px; border-radius: 50%; background: rgba(72, 199, 142, 0.12); color: #48c78e; margin-bottom: 8px;">
+                  ${getIcon("check", 18)}
+                </div>
+                <div style="color: #f4f1ff; font-weight: 700; font-size: 12px;">All Caught Up!</div>
+                <p style="font-size: 11px; margin-top: 4px; color: #8e87a2;">
+                  ${allAssignments.length > 0 ? "You have submitted all active assignments for your batch." : `No active assignments posted for batch ${user.batch_id || "CS-2A"} right now.`}
+                </p>
+              </div>
+            `}
+          </div>
+        </section>
+      </div>
+    `;
+  }
+
+  // --- 4b. Dedicated Course Knowledge Hub & Repository ---
+  function renderKnowledgeHub() {
+    const totalCount = (state.notes || []).length;
+    const filtered = filteredStudentNotes();
+
+    return `
+      <div class="knowledge-hub-view">
+        <div class="hero-row">
+          <div>
+            <div class="eyebrow">Course Repository · Academic Library</div>
+            <h1 class="hero-title">Knowledge Hub & Resources.</h1>
+            <p class="hero-copy">Dedicated course repository featuring downloadable lecture notes, presentation decks, reading packets, and syllabus resources across all your subjects.</p>
+          </div>
+          <div class="date-note">
+            Repository: <b>${totalCount} document${totalCount === 1 ? "" : "s"}</b>
+          </div>
+        </div>
+
+        <section class="panel hub-filter-panel" style="margin-bottom: 20px; padding: 18px 20px;">
+          <div class="notes-filter-bar" style="margin: 0; padding: 0; background: transparent; border: 0;">
+            <div class="notes-search-wrap" style="background: rgba(18, 17, 30, 0.7); border: 1px solid rgba(147, 133, 204, 0.2);">
+              ${getIcon("search", 15)}
+              <input
+                id="notes-search-input"
+                type="search"
+                placeholder="Search lecture notes, slides, or topics (e.g. Graph, DCF, Investments)…"
+                autocomplete="off"
+                value="${state.notesSearch || ""}"
+              />
+              ${state.notesSearch ? `
+                <button type="button" id="btn-clear-notes-search" style="background: transparent; border: 0; color: #8e87a2; cursor: pointer; padding: 2px;">
+                  ${getIcon("close", 12)}
+                </button>
+              ` : ""}
+            </div>
+
+            <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-top: 10px;">
+              <div id="notes-subject-filters" role="tablist" aria-label="Filter notes by subject" style="flex: 1; min-width: 0;">
+                ${notesSubjectOptions().map((subject) => {
+      const isActive = subject.toLowerCase() === String(state.notesSubjectFilter || "All").toLowerCase();
+      return `<button type="button" class="notes-subject-pill${isActive ? " active" : ""}" data-subject="${subject}">${subject}</button>`;
+    }).join("")}
+              </div>
+
+              <div class="hub-results-count" style="font-size: 11px; color: #8e87a2; font-family: var(--app-font-mono); white-space: nowrap;">
+                Showing <strong>${filtered.length}</strong> of <strong>${totalCount}</strong> resources
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Responsive Grid of Downloadable Lecture Notes, Slides, and Resources -->
+        <div id="student-notes-container" class="knowledge-hub-grid">
+          ${renderNotesGridContent(filtered)}
+        </div>
       </div>
     `;
   }
@@ -1084,13 +1726,13 @@
             <div class="eyebrow">${isFaculty ? "Faculty Management" : "Student Portal"} · Assignment Lifecycles</div>
             <h1 class="hero-title">${isFaculty ? "Assignments & Submissions." : "Your Course Assignments."}</h1>
             <p class="hero-copy">${isFaculty
-              ? "Create portals, edit or extend deadlines dynamically, and inspect student submissions."
-              : `Active assignments filtered strictly for your enrolled batch (${state.user?.batch_id || "CS-2A"}).`}</p>
+        ? "Create portals, edit or extend deadlines dynamically, and inspect student submissions."
+        : `Active assignments filtered strictly for your enrolled batch (${state.user?.batch_id || "CS-2A"}).`}</p>
           </div>
           <div>
             ${isFaculty ? `
               <button class="primary-btn" id="btn-create-assignment-view">
-                ${getIcon("plus", 14)} Create Assignment Portal
+                ${getIcon("plus", 14)} Create Assignment 
               </button>
             ` : `
               <div class="date-note">Enrolled Batch: <b>${state.user?.batch_id || "CS-2A"}</b></div>
@@ -1100,10 +1742,10 @@
 
         <div class="assignment-list">
           ${assignments.length > 0 ? assignments.map((a) => {
-            const hasSubmitted = Boolean(a.has_submitted);
-            const isUrgent = a.hours_remaining && a.hours_remaining <= 24 && !hasSubmitted;
+          const hasSubmitted = Boolean(a.has_submitted);
+          const isUrgent = a.hours_remaining && a.hours_remaining <= 24 && !hasSubmitted;
 
-            return `
+          return `
               <div class="assignment-card">
                 <div class="assignment-card-head">
                   <div>
@@ -1165,7 +1807,7 @@
                 </div>
               </div>
             `;
-          }).join("") : `
+        }).join("") : `
             <div class="panel" style="padding: 32px; text-align: center; color: #8e87a2;">
               ${getIcon("assignment", 32)}
               <h3 style="color: #f4f1ff; margin: 10px 0 6px;">No assignments found</h3>
@@ -1248,8 +1890,8 @@
 
         <div class="people-grid">
           ${people.map((p) => {
-            const inits = (p.full_name || "Faculty").split(" ").map((n) => n[0]).join("");
-            return `
+      const inits = (p.full_name || "Faculty").split(" ").map((n) => n[0]).join("");
+      return `
               <article class="panel person-card">
                 <div class="person-avatar purple">${inits}</div>
                 <div class="person-copy">
@@ -1262,7 +1904,7 @@
                 </div>
               </article>
             `;
-          }).join("")}
+    }).join("")}
         </div>
       </div>
     `;
@@ -1333,7 +1975,7 @@
         <div class="modal" onclick="event.stopPropagation()">
           <div class="modal-head">
             <div>
-              <h2>Upload assignment portal</h2>
+              <h2>Upload assignment </h2>
               <p>Set the deadline once and dispatch automated notification emails to all enrolled students.</p>
             </div>
             <button class="close-btn" id="btn-close-modal">${getIcon("close", 16)}</button>
@@ -1346,7 +1988,12 @@
             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
               <div>
                 <label class="field-label" for="assign-subject">Course Subject</label>
-                <input id="assign-subject" class="field-input" required value="Data Structures" />
+                <select id="assign-subject" class="field-input" required>
+                  <option value="" disabled selected>Select course subject...</option>
+                  ${getClassesSubjects().map((subject) => `
+                    <option value="${subject}">${subject}</option>
+                  `).join("")}
+                </select>
               </div>
               <div>
                 <label class="field-label" for="assign-batch">Target Batch</label>
@@ -1384,7 +2031,7 @@
       try {
         const d = new Date(a.deadline);
         deadlineVal = d.toISOString().slice(0, 16);
-      } catch {}
+      } catch { }
     }
 
     return `
@@ -1762,6 +2409,27 @@
 
     const btnOpenThread = document.getElementById("btn-open-thread-modal");
     if (btnOpenThread) btnOpenThread.addEventListener("click", () => { state.activeModal = "thread"; render(); });
+
+    const uploadNotesForm = document.getElementById("upload-notes-form");
+    if (uploadNotesForm) {
+      uploadNotesForm.addEventListener("submit", handleUploadNotes);
+    }
+
+    if (document.getElementById("student-notes-container")) {
+      bindNotesFilterBar();
+      if (!state.notes || state.notes.length === 0) {
+        loadStudentNotes();
+      } else {
+        renderFilteredStudentNotes();
+      }
+    }
+
+    document.querySelectorAll('[data-action="open-knowledge-hub"]').forEach((btn) => {
+      btn.addEventListener("click", () => {
+        state.currentTab = "knowledge-hub";
+        render();
+      });
+    });
 
     // Meet launch buttons
     document.querySelectorAll('[data-action="launch-meet"]').forEach((btn) => {

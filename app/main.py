@@ -64,6 +64,7 @@ from .services.notification import NotificationService
 from .services.reminders import check_and_send_assignment_reminders
 from .timetable_parser import parse_timetable
 
+
 logger = logging.getLogger("openclass.main")
 ROOT = Path(__file__).resolve().parents[1]
 TIMEZONE = ZoneInfo("Asia/Kolkata")
@@ -178,6 +179,33 @@ def get_batch_student_recipients(batch_id: str) -> list[dict]:
                WHERE (s.batch_id = ? OR b.batch = ? OR ? LIKE '%' || s.batch_id || '%') AND s.active = 1""",
             (batch_id, batch_id, batch_id),
         ).fetchall()
+        return [dict(r) for r in rows if r["email"]]
+
+
+def get_notes_student_recipients(subject: str, specialization: Optional[str] = None) -> list[dict]:
+    """Students enrolled in a subject/specialization across all batches."""
+    if not subject:
+        return []
+    with connect() as db:
+        sql = """
+            SELECT DISTINCT s.id, s.name, s.email, s.phone
+            FROM students s
+            LEFT JOIN batch_allocations b ON s.id = b.roll_no
+            WHERE s.active = 1
+              AND (b.subject = ? OR b.subject LIKE '%' || ? || '%')
+        """
+        params: list = [subject, subject]
+        if specialization:
+            sql += """
+              AND (
+                b.batch = ?
+                OR s.batch_id = ?
+                OR b.subject LIKE '%' || ? || '%'
+                OR s.batch_id LIKE '%' || ? || '%'
+              )
+            """
+            params.extend([specialization, specialization, specialization, specialization])
+        rows = db.execute(sql, params).fetchall()
         return [dict(r) for r in rows if r["email"]]
 
 
@@ -642,6 +670,97 @@ async def upload_timetable(
         "classes_detected": len(parsed),
         "message": f"Successfully mapped {len(parsed)} class sessions with Google Meet links.",
     }
+
+
+# --- Lecture Notes ---
+
+
+@app.post("/api/faculty/notes")
+async def upload_lecture_notes(
+    background_tasks: BackgroundTasks,
+    title: str = Form(...),
+    subject: str = Form(...),
+    specialization: Optional[str] = Form(None),
+    file: UploadFile = File(...),
+    current_user: Optional[dict] = Depends(get_optional_current_user),
+):
+    """Faculty uploads lecture notes and notifies enrolled students across batches."""
+    if not file.filename:
+        raise HTTPException(400, "Please attach a lecture notes file.")
+
+    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    safe_name = Path(file.filename).name
+    dest = UPLOAD_DIR / f"{now().replace(':', '-')}_{safe_name}"
+    with dest.open("wb") as destination:
+        shutil.copyfileobj(file.file, destination)
+
+    faculty_name = current_user.get("name") if current_user else None
+    stamp = now()
+    with connect() as db:
+        cursor = db.execute(
+            """INSERT INTO lecture_notes (
+                title, subject, specialization, file_path, original_filename, faculty_name, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (title, subject, specialization, str(dest), safe_name, faculty_name, stamp),
+        )
+        note_id = cursor.lastrowid
+        row = db.execute("SELECT * FROM lecture_notes WHERE id = ?", (note_id,)).fetchone()
+        created = dict(row)
+
+    recipients = get_notes_student_recipients(subject, specialization)
+
+    def dispatch_notes_emails():
+        subject_line = f"New lecture notes: {title} ({subject})"
+        spec_line = f"\nSpecialization: {specialization}" if specialization else ""
+        body_text = (
+            f"New lecture notes have been uploaded for {subject}.{spec_line}\n\n"
+            f"Title: {title}\n"
+            f"File: {safe_name}\n"
+            f"Faculty: {faculty_name or 'Course Faculty'}\n\n"
+            f"Please log into OpenClass to download the notes.\n\n"
+            f"OpenClass Academic System"
+        )
+        for student in recipients:
+            email = student.get("email")
+            if email:
+                NotificationService.send_email(email, subject_line, body_text)
+
+    background_tasks.add_task(dispatch_notes_emails)
+
+    created["emails_queued"] = len(recipients)
+    return created
+
+
+@app.get("/api/notes")
+def list_lecture_notes(
+    subject: Optional[str] = None,
+    specialization: Optional[str] = None,
+):
+    with connect() as db:
+        sql = "SELECT * FROM lecture_notes WHERE 1=1"
+        params: list = []
+        if subject:
+            sql += " AND subject = ?"
+            params.append(subject)
+        if specialization:
+            sql += " AND specialization = ?"
+            params.append(specialization)
+        sql += " ORDER BY id DESC"
+        rows = db.execute(sql, params).fetchall()
+        return [dict(r) for r in rows]
+
+
+@app.get("/api/notes/{note_id}/file")
+def download_lecture_note(note_id: int):
+    with connect() as db:
+        row = db.execute("SELECT * FROM lecture_notes WHERE id = ?", (note_id,)).fetchone()
+        if not row:
+            raise HTTPException(404, "Lecture note not found.")
+        note = dict(row)
+    path = Path(note["file_path"])
+    if not path.exists():
+        raise HTTPException(404, "Lecture note file is missing on disk.")
+    return FileResponse(path, filename=note["original_filename"])
 
 
 # --- Assignment Portal & Lifecycle Management ---
