@@ -1702,7 +1702,7 @@
     const pct = Number(percentage) || 0;
     const band = status || (pct >= 75 ? "Eligible" : pct >= 50 ? "Warning" : "Shortage");
     if (band === "Eligible" || pct >= 75) {
-      return { fill: "#48c78e", track: "rgba(72,199,142,0.18)", text: "#48c78e", label: "Eligible" };
+      return { fill: "#48c78e", track: "rgba(72,199,142,0.18)", text: "#48c78e", label: "Eligible"};
     }
     if (band === "Warning" || pct >= 50) {
       return { fill: "#ffc107", track: "rgba(255,193,7,0.16)", text: "#ffc107", label: "Warning" };
