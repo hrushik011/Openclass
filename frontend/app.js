@@ -1341,6 +1341,7 @@
       : [
         { label: "Dashboard", icon: "dashboard" },
         { label: "My Timetable", icon: "calendar" },
+        { label: "Attendance", icon: "attendance" },
         { label: "Assignments", icon: "assignment" },
         { label: "Class Threads", icon: "threads" },
         { label: "Knowledge Hub", id: "knowledge-hub", icon: "hub" },
@@ -1348,7 +1349,7 @@
       ];
 
     // Ensure valid currentTab for role
-    const validTabs = ["Dashboard", "My Timetable", "Timetable & Attendance", "Attendance Analytics", "Assignments", "Assignments & Sessions", "Class Threads", "People", "Knowledge Hub", "knowledge-hub"];
+    const validTabs = ["Dashboard", "My Timetable", "Attendance", "Timetable & Attendance", "Attendance Analytics", "Assignments", "Assignments & Sessions", "Class Threads", "People", "Knowledge Hub", "knowledge-hub"];
     if (!validTabs.includes(state.currentTab) && state.currentTab !== "Workspace Settings") {
       state.currentTab = "Dashboard";
     }
@@ -1509,6 +1510,8 @@
       case "My Timetable":
       case "Timetable & Attendance":
         return renderTimetableView();
+      case "Attendance":
+        return renderStudentAttendanceView();
       case "Attendance Analytics":
         return renderAttendanceAnalytics();
       case "People":
@@ -1698,16 +1701,16 @@
     `;
   }
 
-  function attendanceBarColors(percentage, status) {
-    const pct = Number(percentage) || 0;
-    const band = status || (pct >= 75 ? "Eligible" : pct >= 50 ? "Warning" : "Shortage");
-    if (band === "Eligible" || pct >= 75) {
-      return { fill: "#48c78e", track: "rgba(72,199,142,0.18)", text: "#48c78e", label: "Eligible"};
+  function attendanceBarColors(percentage) {
+    const pct = Number(percentage);
+    const n = Number.isFinite(pct) ? pct : 0;
+    if (n >= 75) {
+      return { fill: "#10B981", track: "rgba(16,185,129,0.18)", text: "#10B981", label: "Eligible" };
     }
-    if (band === "Warning" || pct >= 50) {
-      return { fill: "#ffc107", track: "rgba(255,193,7,0.16)", text: "#ffc107", label: "Warning" };
+    if (n > 50) {
+      return { fill: "#F59E0B", track: "rgba(245,158,11,0.18)", text: "#F59E0B", label: "Warning" };
     }
-    return { fill: "#ff8b7b", track: "rgba(255,139,123,0.16)", text: "#ff8b7b", label: "Shortage" };
+    return { fill: "#EF4444", track: "rgba(239,68,68,0.18)", text: "#EF4444", label: "Shortage" };
   }
 
   function facultyAttendanceTotals() {
@@ -1792,7 +1795,7 @@
           ${data && !subjects.length ? `<p style="font-size: 11px; color: #8e87a2;">No subject attendance records yet. Join a Google Meet session to check in.</p>` : ""}
           ${subjects.map((item) => {
             const pct = Number(item.percentage) || 0;
-            const colors = attendanceBarColors(pct, item.status);
+            const colors = attendanceBarColors(pct);
             const attended = item.attended != null ? item.attended : 0;
             const total = item.total != null ? item.total : 0;
             return `
@@ -1813,6 +1816,23 @@
           }).join("")}
         </div>
       </section>
+    `;
+  }
+
+  function renderStudentAttendanceView() {
+    const user = state.user || {};
+    return `
+      <div class="student-view">
+        <div class="hero-row">
+          <div>
+            <div class="eyebrow">Student Portal · Attendance</div>
+            <h1 class="hero-title">My Attendance.</h1>
+            <p class="hero-copy">Live subject-wise attendance for batch ${user.batch_id || "CS-2A"}. Green is 75% or higher, yellow is above 50%, red is 50% or below.</p>
+          </div>
+          ${renderOverallAttendancePill()}
+        </div>
+        ${renderStudentAttendanceCard()}
+      </div>
     `;
   }
 
@@ -1852,7 +1872,7 @@
           </div>
           <div class="panel" style="padding: 16px 18px;">
             <div style="font-size: 10px; color: #8e87a2; text-transform: uppercase; letter-spacing: 0.08em;">Reporting Standard</div>
-            <div style="font-size: 13px; font-weight: 700; color: #f4f1ff; margin-top: 8px;">≥75% Strong · ≥50% Watch · &lt;50% At Risk</div>
+            <div style="font-size: 13px; font-weight: 700; color: #f4f1ff; margin-top: 8px;">≥75% Strong · &gt;50% Watch · ≤50% At Risk</div>
             <div style="font-size: 11px; color: #8e87a2; margin-top: 6px;">Present + Late counted toward attendance.</div>
           </div>
         </div>
@@ -1879,7 +1899,7 @@
                 ${data && !subjects.length ? `<tr><td colspan="4" style="padding: 24px 20px; color: #8e87a2;">No class sessions found. Ingest a timetable or schedule lectures to populate this report.</td></tr>` : ""}
                 ${subjects.map((row) => {
                   const pct = Number(row.average_attendance_percentage) || 0;
-                  const colors = attendanceBarColors(pct, row.status === "Strong" ? "Eligible" : row.status === "Watch" ? "Warning" : "Shortage");
+                  const colors = attendanceBarColors(pct);
                   const batches = (row.batches || []).join(", ") || "—";
                   return `
                     <tr style="border-bottom: 1px solid rgba(147,133,204,0.1);">
@@ -1928,11 +1948,8 @@
             <h1 class="hero-title">Good morning, <span class="accent">${user.name || "Student"}.</span></h1>
             <p class="hero-copy">Your personalized learning space, arranged around lectures, submissions, and class notes.</p>
           </div>
-          <div style="display: flex; flex-direction: column; align-items: flex-end; gap: 8px;">
-            ${renderOverallAttendancePill()}
-            <div class="date-note">
-              Synced via <b>Microsoft 365 OIDC</b>
-            </div>
+          <div class="date-note">
+            Synced via <b>Microsoft 365 OIDC</b>
           </div>
         </div>
 
@@ -2057,8 +2074,6 @@
             `}
           </div>
         </section>
-
-        ${renderStudentAttendanceCard()}
       </div>
     `;
   }
