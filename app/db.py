@@ -151,6 +151,57 @@ CREATE TABLE IF NOT EXISTS lecture_notes (
     faculty_name TEXT,
     created_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS attendance_records (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    student_id TEXT NOT NULL,
+    student_name TEXT NOT NULL,
+    batch_id TEXT NOT NULL,
+    class_id INTEGER NOT NULL,
+    subject TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'Present', -- 'Present', 'Absent', or 'Late'
+    timestamp TEXT NOT NULL,
+    verified_by_faculty INTEGER NOT NULL DEFAULT 0,
+    UNIQUE(student_id, class_id)
+);
+
+CREATE TABLE IF NOT EXISTS attendance_records (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    student_id TEXT NOT NULL,
+    student_name TEXT NOT NULL,
+    batch_id TEXT NOT NULL,
+    class_id TEXT NOT NULL,
+    subject TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'Absent',
+    timestamp TEXT,
+    verified_by_faculty BOOLEAN DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS threads (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL,
+    body TEXT,
+    scope_type TEXT NOT NULL DEFAULT 'public',
+    batch_id TEXT,
+    subject TEXT,
+    recipient_faculty_id INTEGER,
+    author_id TEXT,
+    author_name TEXT,
+    author_role TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS thread_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    thread_id INTEGER NOT NULL,
+    author_id TEXT,
+    author_name TEXT,
+    author_role TEXT,
+    body TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY(thread_id) REFERENCES threads(id)
+);
 """
 
 def now() -> str:
@@ -295,6 +346,48 @@ def seed_default_data(db: sqlite3.Connection):
             (deadline_7d, stamp, stamp)
         )
 
+    thread_count = db.execute("SELECT count(*) FROM threads").fetchone()[0]
+    if thread_count == 0:
+        db.execute(
+            """INSERT INTO threads (title, body, scope_type, batch_id, subject, recipient_faculty_id,
+                author_id, author_name, author_role, created_at, updated_at)
+               VALUES (?, ?, 'public', NULL, NULL, NULL, ?, ?, 'STUDENT', ?, ?)""",
+            (
+                "What is the intuition behind Dijkstra?",
+                "Can someone explain Dijkstra in plain language with a campus-map analogy?",
+                "std-001",
+                "Arjun Rao",
+                stamp,
+                stamp,
+            ),
+        )
+        db.execute(
+            """INSERT INTO threads (title, body, scope_type, batch_id, subject, recipient_faculty_id,
+                author_id, author_name, author_role, created_at, updated_at)
+               VALUES (?, ?, 'batch', 'CS-2A', 'Data Structures', NULL, ?, ?, 'FACULTY', ?, ?)""",
+            (
+                "Office hours before Assignment 3",
+                "CS-2A Data Structures: extra office hours this week. Bring graph traversal questions.",
+                "1",
+                "Priya Menon",
+                stamp,
+                stamp,
+            ),
+        )
+        db.execute(
+            """INSERT INTO threads (title, body, scope_type, batch_id, subject, recipient_faculty_id,
+                author_id, author_name, author_role, created_at, updated_at)
+               VALUES (?, ?, 'private', NULL, NULL, 1, ?, ?, 'STUDENT', ?, ?)""",
+            (
+                "Clarification on cycle detection",
+                "Professor, could you review my DSU approach for cycle detection privately?",
+                "std-003",
+                "Karan Verma",
+                stamp,
+                stamp,
+            ),
+        )
+
 def initialize():
     with connect() as db:
         db.executescript(SCHEMA)
@@ -314,4 +407,10 @@ def initialize():
         _add_column_if_missing(db, "delivery_log", "channel", "TEXT")
         _add_column_if_missing(db, "delivery_log", "assignment_id", "INTEGER")
         _add_column_if_missing(db, "assignment_reminder_logs", "reminder_type", "TEXT")
+        _add_column_if_missing(db, "attendance_records", "verified_by_faculty", "INTEGER NOT NULL DEFAULT 0")
+        _add_column_if_missing(db, "threads", "scope_type", "TEXT")
+        _add_column_if_missing(db, "threads", "batch_id", "TEXT")
+        _add_column_if_missing(db, "threads", "subject", "TEXT")
+        _add_column_if_missing(db, "threads", "recipient_faculty_id", "INTEGER")
+        _add_column_if_missing(db, "threads", "body", "TEXT")
         seed_default_data(db)

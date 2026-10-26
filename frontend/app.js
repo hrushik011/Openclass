@@ -20,7 +20,7 @@
     notes: [],
     notesSearch: "",
     notesSubjectFilter: "All",
-    activeModal: null, // "assignment_create" | "assignment_edit" | "assignment_submit" | "submissions_view" | "sudden_class" | "upload_timetable" | "manage_batches" | "thread"
+    activeModal: null, // "assignment_create" | "assignment_edit" | "assignment_submit" | "submissions_view" | "sudden_class" | "upload_timetable" | "manage_batches" | "thread" | "attendance_roster"
     modalData: null,
     toast: null,
     toastTimer: null,
@@ -31,11 +31,14 @@
     loginError: "",
     filterSearch: "",
     notificationOpen: false,
-    threads: [
-      { title: "What is the intuition behind Dijkstra?", by: "Arjun Rao", count: 8 },
-      { title: "Office hours before Assignment 3", by: "Meera Shah", count: 4 },
-      { title: "Cycle detection using Disjoint Set Union", by: "Karan Verma", count: 3 }
-    ]
+    attendanceRoster: null,   // current loaded roster { class_id, subject, roster: [] }
+    attendanceLoading: false, // for roster fetch spinner
+    studentAttendance: null,  // GET /api/attendance/student/{id} breakdown
+    facultyAttendance: null,  // GET /api/faculty/attendance/summary
+    threads: [],
+    threadScopeFilter: "all",
+    activeThread: null,
+    threadComposeScope: "public"
   };
 
   if (state.user && state.user.role) {
@@ -163,7 +166,8 @@
       arrowRight: `<svg width="${s}" height="${s}" class="${className}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"></line><polyline points="12 5 19 12 12 19"></polyline></svg>`,
       download: `<svg width="${s}" height="${s}" class="${className}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>`,
       shield: `<svg width="${s}" height="${s}" class="${className}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>`,
-      fileText: `<svg width="${s}" height="${s}" class="${className}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>`
+      fileText: `<svg width="${s}" height="${s}" class="${className}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>`,
+      attendance: `<svg width="${s}" height="${s}" class="${className}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"></path><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path></svg>`
     };
     return icons[name] || "";
   }
@@ -269,6 +273,13 @@
       state.loginError = "";
       state.filterSearch = "";
       state.notificationOpen = false;
+      state.attendanceRoster = null;
+      state.studentAttendance = null;
+      state.facultyAttendance = null;
+      state.threads = [];
+      state.threadScopeFilter = "all";
+      state.activeThread = null;
+      state.threadComposeScope = "public";
 
       // Clear all local and session storage
       try {
@@ -298,6 +309,104 @@
       render();
     },
 
+    studentId() {
+      const user = state.user || {};
+      return user.id || user.roll_no || user.student_id || null;
+    },
+
+    async loadStudentAttendance() {
+      const sid = api.studentId();
+      if (!sid || !state.token) return;
+      try {
+        const res = await fetch(`/api/attendance/student/${encodeURIComponent(sid)}`, {
+          headers: api.headers()
+        });
+        if (res.ok) state.studentAttendance = await res.json();
+      } catch (e) {
+        console.warn("Student attendance fetch failed", e);
+      }
+    },
+
+    async loadFacultyAttendanceSummary() {
+      if (!state.token) return;
+      try {
+        const res = await fetch("/api/faculty/attendance/summary", {
+          headers: api.headers()
+        });
+        if (res.ok) state.facultyAttendance = await res.json();
+      } catch (e) {
+        console.warn("Faculty attendance summary fetch failed", e);
+      }
+    },
+
+    async loadThreads() {
+      if (!state.token) return;
+      try {
+        const res = await fetch("/api/threads", { headers: api.headers() });
+        if (res.ok) state.threads = await res.json();
+      } catch (e) {
+        console.warn("Threads fetch failed", e);
+      }
+    },
+
+    async loadThread(threadId) {
+      try {
+        const res = await fetch(`/api/threads/${threadId}`, { headers: api.headers() });
+        if (!res.ok) throw new Error("Could not open thread");
+        state.activeThread = await res.json();
+        render();
+      } catch (e) {
+        showToast(`Error: ${e.message}`);
+      }
+    },
+
+    async createThread(payload) {
+      state.loading = true;
+      render();
+      try {
+        const res = await fetch("/api/threads", {
+          method: "POST",
+          headers: api.headers(),
+          body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || "Could not create thread");
+        const scope = payload.scope_type;
+        if (scope === "private") {
+          showToast(`Private message sent to faculty · email alert queued`);
+        } else if (scope === "batch") {
+          showToast(`Batch thread posted · enrolled students will be notified if this is a faculty announcement`);
+        } else {
+          showToast(`Public thread started: "${data.title}"`);
+        }
+        state.activeModal = null;
+        state.threadComposeScope = "public";
+        await api.loadThreads();
+        state.activeThread = data;
+      } catch (e) {
+        showToast(`Error: ${e.message}`);
+      } finally {
+        state.loading = false;
+        render();
+      }
+    },
+
+    async postThreadMessage(threadId, body) {
+      try {
+        const res = await fetch(`/api/threads/${threadId}/messages`, {
+          method: "POST",
+          headers: api.headers(),
+          body: JSON.stringify({ body })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || "Could not send message");
+        await api.loadThread(threadId);
+        await api.loadThreads();
+      } catch (e) {
+        showToast(`Error: ${e.message}`);
+      }
+    },
+
     async loadDashboardData() {
       if (!state.token) return;
       try {
@@ -313,6 +422,9 @@
         if (batchRes.ok) state.batches = await batchRes.json();
         if (peopleRes.ok) state.people = await peopleRes.json();
         if (notesRes && notesRes.ok) state.notes = await notesRes.json();
+        await api.loadStudentAttendance();
+        await api.loadFacultyAttendanceSummary();
+        await api.loadThreads();
       } catch (e) {
         console.error("Data fetch error", e);
       }
@@ -498,6 +610,79 @@
         showToast(`Launching Google Meet (${data.role_badge}) · ${data.controls_notice}`);
       } catch (e) {
         showToast(`Meet Error: ${e.message}`);
+      }
+    },
+
+    async attendanceCheckIn(sessionId, sessionData) {
+      // Called before opening the Google Meet link for students
+      try {
+        const user = state.user || {};
+        const sid = String(api.studentId() || "std-001");
+        await fetch("/api/attendance/check-in", {
+          method: "POST",
+          headers: api.headers(),
+          body: JSON.stringify({
+            student_id: sid,
+            student_name: user.name || null,
+            batch_id: user.batch_id || null,
+            class_id: Number(sessionId)
+          })
+        });
+        await api.loadStudentAttendance();
+      } catch (e) {
+        console.warn("Attendance check-in error (non-blocking):", e.message);
+      }
+    },
+
+    async launchMeetWithCheckIn(sessionId) {
+      // For students: check in first, then open Meet
+      const isStudent = (state.user && state.user.role && state.user.role.toUpperCase() === "STUDENT") || state.role === "student";
+      if (isStudent) {
+        await api.attendanceCheckIn(sessionId);
+      }
+      const launched = api.launchMeet(sessionId);
+      if (isStudent && state.currentTab === "Dashboard") render();
+      return launched;
+    },
+
+    async loadSessionRoster(classId) {
+      state.attendanceLoading = true;
+      render();
+      try {
+        const res = await fetch(`/api/attendance/session/${classId}`, {
+          headers: api.headers()
+        });
+        if (!res.ok) throw new Error("Could not load attendance roster");
+        state.attendanceRoster = await res.json();
+        state.activeModal = "attendance_roster";
+      } catch (e) {
+        showToast(`Roster error: ${e.message}`);
+      } finally {
+        state.attendanceLoading = false;
+        render();
+      }
+    },
+
+    async saveAttendanceOverrides(classId, overrides) {
+      state.loading = true;
+      render();
+      try {
+        const res = await fetch(`/api/attendance/session/${classId}/override`, {
+          method: "POST",
+          headers: api.headers(),
+          body: JSON.stringify({ overrides })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || "Override failed");
+        showToast(`Attendance finalized · ${data.overrides_applied} records saved.`);
+        await api.loadFacultyAttendanceSummary();
+        // Refresh roster in modal
+        await api.loadSessionRoster(classId);
+      } catch (e) {
+        showToast(`Error: ${e.message}`);
+      } finally {
+        state.loading = false;
+        render();
       }
     }
   };
@@ -1147,6 +1332,7 @@
       ? [
         { label: "Dashboard", icon: "dashboard" },
         { label: "Timetable & Attendance", icon: "calendar" },
+        { label: "Attendance Analytics", icon: "attendance" },
         { label: "Assignments & Sessions", icon: "assignment" },
         { label: "Class Threads", icon: "threads" },
         { label: "Knowledge Hub", id: "knowledge-hub", icon: "hub" },
@@ -1162,7 +1348,7 @@
       ];
 
     // Ensure valid currentTab for role
-    const validTabs = ["Dashboard", "My Timetable", "Timetable & Attendance", "Assignments", "Assignments & Sessions", "Class Threads", "People", "Knowledge Hub", "knowledge-hub"];
+    const validTabs = ["Dashboard", "My Timetable", "Timetable & Attendance", "Attendance Analytics", "Assignments", "Assignments & Sessions", "Class Threads", "People", "Knowledge Hub", "knowledge-hub"];
     if (!validTabs.includes(state.currentTab) && state.currentTab !== "Workspace Settings") {
       state.currentTab = "Dashboard";
     }
@@ -1323,6 +1509,8 @@
       case "My Timetable":
       case "Timetable & Attendance":
         return renderTimetableView();
+      case "Attendance Analytics":
+        return renderAttendanceAnalytics();
       case "People":
         return renderPeopleView();
       case "Class Threads":
@@ -1352,8 +1540,11 @@
             <h1 class="hero-title">Coordinate the whole class, <span class="accent">${user.name || "Faculty"}.</span></h1>
             <p class="hero-copy">Manage rosters, real-time Google Meet spaces with strict host controls, assignment deadlines, and batch notifications.</p>
           </div>
-          <div class="date-note">
-            Coordinator mode <b>active</b>
+          <div style="display: flex; flex-direction: column; align-items: flex-end; gap: 8px;">
+            ${renderFacultyClassesConductedPill()}
+            <div class="date-note">
+              Coordinator mode <b>active</b>
+            </div>
           </div>
         </div>
 
@@ -1376,8 +1567,12 @@
 
               <div class="faculty-stats">
                 <div class="faculty-stat">
-                  <span>Lectures mapped</span>
-                  <strong>${String(state.classes.length).padStart(2, "0")}</strong>
+                  <span>Total classes conducted</span>
+                  <strong>${String(
+                    (state.facultyAttendance && state.facultyAttendance.total_classes_conducted != null)
+                      ? state.facultyAttendance.total_classes_conducted
+                      : state.classes.length
+                  ).padStart(2, "0")}</strong>
                   <button class="text-action" id="btn-open-sudden-class">+ Schedule lecture</button>
                 </div>
                 <div class="faculty-stat">
@@ -1503,6 +1698,214 @@
     `;
   }
 
+  function attendanceBarColors(percentage, status) {
+    const pct = Number(percentage) || 0;
+    const band = status || (pct >= 75 ? "Eligible" : pct >= 50 ? "Warning" : "Shortage");
+    if (band === "Eligible" || pct >= 75) {
+      return { fill: "#48c78e", track: "rgba(72,199,142,0.18)", text: "#48c78e", label: "Eligible" };
+    }
+    if (band === "Warning" || pct >= 50) {
+      return { fill: "#ffc107", track: "rgba(255,193,7,0.16)", text: "#ffc107", label: "Warning" };
+    }
+    return { fill: "#ff8b7b", track: "rgba(255,139,123,0.16)", text: "#ff8b7b", label: "Shortage" };
+  }
+
+  function facultyAttendanceTotals() {
+    const data = state.facultyAttendance;
+    const conducted = data && data.total_classes_conducted != null
+      ? Number(data.total_classes_conducted)
+      : (state.classes || []).length;
+    const avg = data && data.overall_average_percentage != null
+      ? Number(data.overall_average_percentage)
+      : null;
+    return { conducted, avg, subjectCount: (data && data.subject_count) || 0 };
+  }
+
+  function renderFacultyClassesConductedPill() {
+    const { conducted, avg } = facultyAttendanceTotals();
+    const colors = avg == null
+      ? { fill: "#a78bfa", track: "rgba(167,139,250,0.14)", text: "#cfc2ff" }
+      : attendanceBarColors(avg);
+    return `
+      <div id="faculty-classes-conducted-pill" style="display: inline-flex; align-items: center; gap: 8px; padding: 7px 12px 7px 8px; border-radius: 999px; background: ${colors.track}; border: 1px solid ${colors.fill}55; box-shadow: 0 0 0 3px ${colors.track};">
+        <span style="width: 22px; height: 22px; border-radius: 50%; background: ${colors.fill}22; color: ${colors.text}; display: inline-flex; align-items: center; justify-content: center;">
+          ${getIcon("calendar", 12)}
+        </span>
+        <span style="font-size: 11px; font-weight: 650; color: #f4f1ff; letter-spacing: 0.01em; white-space: nowrap;">
+          Total Classes Conducted: <strong style="color: ${colors.text};">${conducted}</strong>
+          ${avg != null ? `<span style="color: #8e87a2; font-weight: 600;"> · Avg ${avg}%</span>` : ""}
+        </span>
+      </div>
+    `;
+  }
+
+  function renderOverallAttendancePill() {
+    const data = state.studentAttendance;
+    const pct = data && data.overall_percentage != null ? Number(data.overall_percentage) : null;
+    const colors = pct == null
+      ? { fill: "#a78bfa", track: "rgba(167,139,250,0.14)", text: "#cfc2ff", label: "Loading" }
+      : attendanceBarColors(pct);
+    const label = colors.label;
+    const pctText = pct == null ? "—" : `${pct}%`;
+    return `
+      <div id="overall-attendance-pill" style="display: inline-flex; align-items: center; gap: 8px; padding: 7px 12px 7px 8px; border-radius: 999px; background: ${colors.track}; border: 1px solid ${colors.fill}55; box-shadow: 0 0 0 3px ${colors.track};">
+        <span style="width: 22px; height: 22px; border-radius: 50%; background: ${colors.fill}22; color: ${colors.text}; display: inline-flex; align-items: center; justify-content: center;">
+          ${getIcon("attendance", 12)}
+        </span>
+        <span style="font-size: 11px; font-weight: 650; color: #f4f1ff; letter-spacing: 0.01em; white-space: nowrap;">
+          Overall Attendance: <strong style="color: ${colors.text};">${pctText}</strong>
+          <span style="color: #8e87a2; font-weight: 600;"> · ${label}</span>
+        </span>
+      </div>
+    `;
+  }
+
+  function renderStudentAttendanceCard() {
+    const data = state.studentAttendance;
+    const subjects = (data && data.subjects) || [];
+    const overall = data && data.overall_percentage != null ? data.overall_percentage : null;
+    const overallColors = attendanceBarColors(overall);
+
+    return `
+      <section class="panel faculty-overview" style="margin-top: 18px;" id="student-attendance-card">
+        <div class="panel-head">
+          <div class="panel-title">${getIcon("attendance", 15)} 📊 My Subject-Wise Attendance</div>
+          <span class="panel-meta">${
+            overall != null
+              ? `Overall ${overall}% · ${data.total_attended || 0}/${data.total_classes || 0} classes`
+              : "Live from OpenClass"
+          }</span>
+        </div>
+        ${overall != null ? `
+          <div style="padding: 0 20px 12px;">
+            <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px;">
+              <span style="font-size: 11px; color: #8e87a2;">Overall eligibility</span>
+              <span style="font-size: 12px; font-weight: 800; color: ${overallColors.text};">${overall}%</span>
+            </div>
+            <div style="height: 8px; border-radius: 999px; background: ${overallColors.track}; overflow: hidden;">
+              <div style="height: 100%; width: ${Math.min(overall, 100)}%; background: ${overallColors.fill}; border-radius: 999px;"></div>
+            </div>
+          </div>
+        ` : ""}
+        <div style="padding: 4px 20px 18px; display: grid; gap: 12px;">
+          ${!data ? `<p style="font-size: 11px; color: #8e87a2;">Loading live attendance…</p>` : ""}
+          ${data && !subjects.length ? `<p style="font-size: 11px; color: #8e87a2;">No subject attendance records yet. Join a Google Meet session to check in.</p>` : ""}
+          ${subjects.map((item) => {
+            const pct = Number(item.percentage) || 0;
+            const colors = attendanceBarColors(pct, item.status);
+            const attended = item.attended != null ? item.attended : 0;
+            const total = item.total != null ? item.total : 0;
+            return `
+              <div style="padding: 12px 14px; border-radius: 12px; background: rgba(255,255,255,0.02); border: 1px solid rgba(147,133,204,0.14);">
+                <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px;">
+                  <strong style="font-size: 13px; color: #f4f1ff;">${item.subject || "Course"}</strong>
+                  <span style="font-size: 9px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: ${colors.text}; background: ${colors.track}; border: 1px solid ${colors.fill}55; border-radius: 999px; padding: 3px 8px;">${colors.label}</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px;">
+                  <span style="font-size: 11px; color: #8e87a2;">${attended}/${total} classes</span>
+                  <span style="font-size: 16px; font-weight: 800; color: ${colors.text};">${pct}%</span>
+                </div>
+                <div style="height: 9px; border-radius: 999px; background: ${colors.track}; overflow: hidden;">
+                  <div style="height: 100%; width: ${Math.min(Math.max(pct, 0), 100)}%; background: ${colors.fill}; border-radius: 999px; transition: width 0.25s ease;"></div>
+                </div>
+              </div>
+            `;
+          }).join("")}
+        </div>
+      </section>
+    `;
+  }
+
+  function renderAttendanceAnalytics() {
+    const data = state.facultyAttendance;
+    const subjects = (data && data.subjects) || [];
+    const { conducted, avg, subjectCount } = facultyAttendanceTotals();
+    const generated = data && data.generated_at ? formatDeadline(data.generated_at) : "Live";
+    const overallColors = attendanceBarColors(avg == null ? 0 : avg);
+
+    return `
+      <div class="faculty-view attendance-analytics-view">
+        <div class="hero-row">
+          <div>
+            <div class="eyebrow">Faculty Analytics · Institutional Report</div>
+            <h1 class="hero-title">Attendance Analytics.</h1>
+            <p class="hero-copy">Subject-wise lecture volume and average student attendance for academic review and higher-management reporting.</p>
+          </div>
+          <div style="display: flex; flex-direction: column; align-items: flex-end; gap: 8px;">
+            ${renderFacultyClassesConductedPill()}
+            <div class="date-note">Generated <b>${generated}</b></div>
+          </div>
+        </div>
+
+        <div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-bottom: 18px;">
+          <div class="panel" style="padding: 16px 18px;">
+            <div style="font-size: 10px; color: #8e87a2; text-transform: uppercase; letter-spacing: 0.08em;">Total Classes Conducted</div>
+            <div style="font-size: 28px; font-weight: 800; color: #f4f1ff; margin-top: 6px;">${conducted}</div>
+            <div style="font-size: 11px; color: #8e87a2; margin-top: 4px;">Across ${subjectCount || subjects.length} subject${(subjectCount || subjects.length) === 1 ? "" : "s"}</div>
+          </div>
+          <div class="panel" style="padding: 16px 18px;">
+            <div style="font-size: 10px; color: #8e87a2; text-transform: uppercase; letter-spacing: 0.08em;">Overall Average Attendance</div>
+            <div style="font-size: 28px; font-weight: 800; color: ${overallColors.text}; margin-top: 6px;">${avg != null ? avg + "%" : "—"}</div>
+            <div style="height: 8px; border-radius: 999px; background: ${overallColors.track}; overflow: hidden; margin-top: 10px;">
+              <div style="height: 100%; width: ${Math.min(Math.max(avg || 0, 0), 100)}%; background: ${overallColors.fill}; border-radius: 999px;"></div>
+            </div>
+          </div>
+          <div class="panel" style="padding: 16px 18px;">
+            <div style="font-size: 10px; color: #8e87a2; text-transform: uppercase; letter-spacing: 0.08em;">Reporting Standard</div>
+            <div style="font-size: 13px; font-weight: 700; color: #f4f1ff; margin-top: 8px;">≥75% Strong · ≥50% Watch · &lt;50% At Risk</div>
+            <div style="font-size: 11px; color: #8e87a2; margin-top: 6px;">Present + Late counted toward attendance.</div>
+          </div>
+        </div>
+
+        <section class="panel" style="padding: 0; overflow: hidden;">
+          <div class="panel-head" style="padding: 16px 20px;">
+            <div class="panel-title">${getIcon("attendance", 15)} Subject-wise lecture report</div>
+            <button type="button" class="secondary-btn" id="btn-print-attendance-report" style="font-size: 11px;">
+              ${getIcon("download", 12)} Print / Export view
+            </button>
+          </div>
+          <div style="overflow-x: auto;">
+            <table style="width: 100%; border-collapse: collapse; font-size: 12px;">
+              <thead>
+                <tr style="text-align: left; color: #8e87a2; font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; border-bottom: 1px solid rgba(147,133,204,0.18);">
+                  <th style="padding: 10px 20px; font-weight: 700;">Subject</th>
+                  <th style="padding: 10px 16px; font-weight: 700;">Batches</th>
+                  <th style="padding: 10px 16px; font-weight: 700; text-align: right;">Lectures conducted</th>
+                  <th style="padding: 10px 20px; font-weight: 700; min-width: 220px;">Average student attendance</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${!data ? `<tr><td colspan="4" style="padding: 24px 20px; color: #8e87a2;">Loading analytics…</td></tr>` : ""}
+                ${data && !subjects.length ? `<tr><td colspan="4" style="padding: 24px 20px; color: #8e87a2;">No class sessions found. Ingest a timetable or schedule lectures to populate this report.</td></tr>` : ""}
+                ${subjects.map((row) => {
+                  const pct = Number(row.average_attendance_percentage) || 0;
+                  const colors = attendanceBarColors(pct, row.status === "Strong" ? "Eligible" : row.status === "Watch" ? "Warning" : "Shortage");
+                  const batches = (row.batches || []).join(", ") || "—";
+                  return `
+                    <tr style="border-bottom: 1px solid rgba(147,133,204,0.1);">
+                      <td style="padding: 14px 20px; color: #f4f1ff; font-weight: 700;">${row.subject}</td>
+                      <td style="padding: 14px 16px; color: #b3aec5;">${batches}</td>
+                      <td style="padding: 14px 16px; text-align: right; color: #f4f1ff; font-weight: 800; font-variant-numeric: tabular-nums;">${row.total_classes_conducted}</td>
+                      <td style="padding: 14px 20px;">
+                        <div style="display: flex; align-items: center; gap: 10px;">
+                          <div style="flex: 1; height: 8px; border-radius: 999px; background: ${colors.track}; overflow: hidden;">
+                            <div style="height: 100%; width: ${Math.min(Math.max(pct, 0), 100)}%; background: ${colors.fill}; border-radius: 999px;"></div>
+                          </div>
+                          <strong style="min-width: 52px; text-align: right; color: ${colors.text};">${pct}%</strong>
+                          <span style="font-size: 9px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: ${colors.text}; background: ${colors.track}; border-radius: 999px; padding: 3px 8px; white-space: nowrap;">${row.status || colors.label}</span>
+                        </div>
+                      </td>
+                    </tr>
+                  `;
+                }).join("")}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+    `;
+  }
+
   // --- 4. Student Dashboard ---
   function renderStudentDashboard() {
     const user = state.user || {};
@@ -1525,8 +1928,11 @@
             <h1 class="hero-title">Good morning, <span class="accent">${user.name || "Student"}.</span></h1>
             <p class="hero-copy">Your personalized learning space, arranged around lectures, submissions, and class notes.</p>
           </div>
-          <div class="date-note">
-            Synced via <b>Microsoft 365 OIDC</b>
+          <div style="display: flex; flex-direction: column; align-items: flex-end; gap: 8px;">
+            ${renderOverallAttendancePill()}
+            <div class="date-note">
+              Synced via <b>Microsoft 365 OIDC</b>
+            </div>
           </div>
         </div>
 
@@ -1651,6 +2057,8 @@
             `}
           </div>
         </section>
+
+        ${renderStudentAttendanceCard()}
       </div>
     `;
   }
@@ -1844,23 +2252,51 @@
 
         <div style="display: grid; gap: 12px; margin-top: 16px;">
           ${classes.length > 0 ? classes.map((c) => `
-            <div class="panel" style="padding: 16px 20px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 14px;">
-              <div style="display: flex; align-items: center; gap: 16px;">
-                <div style="background: rgba(167, 139, 250, 0.15); border: 1px solid rgba(167, 139, 250, 0.3); border-radius: 8px; padding: 8px 12px; text-align: center;">
-                  <strong style="color: #a78bfa; font-size: 13px; display: block;">${c.start_time}</strong>
-                  <span style="font-size: 9px; color: #8e87a2;">${c.weekday || "Thursday"}</span>
+            <div class="panel" style="padding: 0; overflow: hidden; border-radius: 14px;">
+              <!-- Session header row -->
+              <div style="padding: 16px 20px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 14px;">
+                <div style="display: flex; align-items: center; gap: 16px;">
+                  <div style="background: rgba(167, 139, 250, 0.15); border: 1px solid rgba(167, 139, 250, 0.3); border-radius: 8px; padding: 8px 12px; text-align: center;">
+                    <strong style="color: #a78bfa; font-size: 13px; display: block;">${c.start_time}</strong>
+                    <span style="font-size: 9px; color: #8e87a2;">${c.weekday || "Thursday"}</span>
+                  </div>
+                  <div>
+                    <strong style="font-size: 13px; color: #f4f1ff; display: block;">${c.subject}</strong>
+                    <span style="font-size: 10px; color: #8e87a2;">Faculty: ${c.faculty_name || "Faculty Lead"} · Batch: ${c.batch || "CS-2A"}</span>
+                  </div>
                 </div>
-                <div>
-                  <strong style="font-size: 13px; color: #f4f1ff; display: block;">${c.subject}</strong>
-                  <span style="font-size: 10px; color: #8e87a2;">Faculty: ${c.faculty_name || "Faculty Lead"} · Batch: ${c.batch || "CS-2A"}</span>
+
+                <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+                  <button class="meet-btn ${isFaculty ? "host-mode" : ""}" data-action="launch-meet" data-id="${c.id}">
+                    ${getIcon("video", 14)} ${isFaculty ? "Launch Google Meet (Host)" : "Join Google Meet"}
+                  </button>
+                  ${isFaculty ? `
+                    <button class="secondary-btn" style="font-size: 10px; padding: 7px 12px; gap: 6px; display: flex; align-items: center;" data-action="view-attendance" data-id="${c.id}">
+                      ${getIcon("attendance", 13)} Attendance & Logs
+                    </button>
+                  ` : ""}
                 </div>
               </div>
 
-              <div style="display: flex; align-items: center; gap: 10px;">
-                <button class="meet-btn ${isFaculty ? "host-mode" : ""}" data-action="launch-meet" data-id="${c.id}">
-                  ${getIcon("video", 14)} ${isFaculty ? "Launch Google Meet (Host)" : "Join Google Meet"}
-                </button>
+              ${isFaculty ? `
+              <!-- Inline attendance summary bar for faculty -->
+              <div style="border-top: 1px solid rgba(147,133,204,0.12); padding: 10px 20px; display: flex; align-items: center; gap: 16px; background: rgba(167,139,250,0.04);">
+                <span style="font-size: 10px; color: #8e87a2; display: flex; align-items: center; gap: 5px;">
+                  ${getIcon("people", 11)}
+                  <span>Batch ${c.batch || "CS-2A"}</span>
+                </span>
+                <span style="font-size: 10px; color: #8e87a2;">·</span>
+                <span style="font-size: 10px; color: #61d7da; display: flex; align-items: center; gap: 5px;">
+                  ${getIcon("attendance", 11)}
+                  Click <strong style="color: #a78bfa; margin: 0 2px;">Attendance & Logs</strong> to view or finalize the smart roster
+                </span>
+                <div style="margin-left: auto;">
+                  <a href="/api/attendance/session/${c.id}/export" class="mini-btn" download style="font-size: 9px; padding: 5px 10px; display: inline-flex; align-items: center; gap: 5px;">
+                    ${getIcon("download", 11)} Download CSV
+                  </a>
+                </div>
               </div>
+              ` : ""}
             </div>
           `).join("") : `<p>No timetable entries available.</p>`}
         </div>
@@ -1910,34 +2346,124 @@
     `;
   }
 
+  function threadScopeMeta(thread) {
+    const scope = String(thread.scope_type || "public").toLowerCase();
+    if (scope === "batch") {
+      return {
+        key: "batch",
+        label: "Course batch",
+        detail: [thread.batch_id, thread.subject].filter(Boolean).join(" · ") || "Batch thread",
+        color: "#61d7da"
+      };
+    }
+    if (scope === "private") {
+      return {
+        key: "private",
+        label: "Private DM",
+        detail: thread.recipient_faculty_name ? `To ${thread.recipient_faculty_name}` : "Faculty DM",
+        color: "#a78bfa"
+      };
+    }
+    return { key: "public", label: "Public", detail: "Open discussion", color: "#48c78e" };
+  }
+
+  function visibleThreads() {
+    const filter = state.threadScopeFilter || "all";
+    return (state.threads || []).filter((t) => {
+      if (filter === "all") return true;
+      return String(t.scope_type || "public").toLowerCase() === filter;
+    });
+  }
+
   // --- 8. Class Threads View ---
   function renderThreadsView() {
+    ensureNotesFilterStyles();
+    const isFaculty = state.role === "faculty";
+    const threads = visibleThreads();
+    const active = state.activeThread;
+    const filters = [
+      { id: "all", label: "All" },
+      { id: "public", label: "Public" },
+      { id: "batch", label: "Course batch" },
+      { id: "private", label: "Private faculty DMs" }
+    ];
+
     return `
       <div class="threads-view">
         <div class="hero-row">
           <div>
-            <div class="eyebrow">Academic Discussion · Collaborative Forum</div>
-            <h1 class="hero-title">Class Discussion Threads.</h1>
-            <p class="hero-copy">Open loops for questions, concept breakthroughs, and office hour follow-ups.</p>
+            <div class="eyebrow">Academic Discussion · Scoped Messaging</div>
+            <h1 class="hero-title">Class Threads.</h1>
+            <p class="hero-copy">${isFaculty
+              ? "Post public discussions, batch announcements (email the enrolled class), or reply to private student DMs."
+              : "Join public discussions, your batch course threads, or message faculty privately — DMs email the professor."}</p>
           </div>
           <button class="primary-btn" id="btn-open-thread-modal">
-            ${getIcon("plus", 14)} Start New Thread
+            ${getIcon("plus", 14)} ${isFaculty ? "New thread / announcement" : "New thread or faculty DM"}
           </button>
         </div>
 
-        <div style="display: grid; gap: 10px; margin-top: 16px;">
-          ${state.threads.map((t) => `
-            <div class="panel" style="padding: 14px 18px; display: flex; align-items: center; justify-content: space-between;">
-              <div style="display: flex; align-items: center; gap: 12px;">
-                <div class="avatar" style="width: 28px; height: 28px; font-size: 10px;">${t.by.split(" ").map(n => n[0]).join("")}</div>
-                <div>
-                  <strong style="color: #f4f1ff; font-size: 12px; display: block;">${t.title}</strong>
-                  <span style="font-size: 10px; color: #8e87a2;">Started by ${t.by}</span>
-                </div>
-              </div>
-              <span class="status-pill">${t.count} replies</span>
-            </div>
+        <div id="thread-scope-filters" style="display: flex; gap: 6px; flex-wrap: wrap; margin: 4px 0 16px;">
+          ${filters.map((f) => `
+            <button type="button" class="notes-subject-pill${state.threadScopeFilter === f.id ? " active" : ""}" data-thread-scope="${f.id}">${f.label}</button>
           `).join("")}
+        </div>
+
+        <div style="display: grid; grid-template-columns: ${active ? "minmax(280px, 1fr) minmax(320px, 1.1fr)" : "1fr"}; gap: 14px; align-items: start;">
+          <div style="display: grid; gap: 10px;">
+            ${threads.length ? threads.map((t) => {
+              const meta = threadScopeMeta(t);
+              const author = t.author_name || t.by || "Member";
+              const initials = String(author).split(" ").map((n) => n[0]).join("").slice(0, 2).toUpperCase();
+              const selected = active && Number(active.id) === Number(t.id);
+              const replies = t.message_count != null ? t.message_count : (t.count || 0);
+              return `
+                <button type="button" class="panel" data-action="open-thread" data-id="${t.id}" style="padding: 14px 18px; display: flex; align-items: center; justify-content: space-between; text-align: left; cursor: pointer; width: 100%; font-family: inherit; border: 1px solid ${selected ? "rgba(167,139,250,0.45)" : "rgba(147,133,204,0.14)"}; background: ${selected ? "rgba(167,139,250,0.08)" : "rgba(255,255,255,0.02)"};">
+                  <div style="display: flex; align-items: center; gap: 12px; min-width: 0;">
+                    <div class="avatar" style="width: 28px; height: 28px; font-size: 10px;">${initials}</div>
+                    <div style="min-width: 0;">
+                      <strong style="color: #f4f1ff; font-size: 12px; display: block;">${t.title}</strong>
+                      <span style="font-size: 10px; color: #8e87a2;">${author} · ${meta.detail}</span>
+                    </div>
+                  </div>
+                  <div style="display: flex; align-items: center; gap: 8px; flex-shrink: 0;">
+                    <span class="status-pill" style="border-color: ${meta.color}55; color: ${meta.color};">${meta.label}</span>
+                    <span class="status-pill">${replies} ${replies === 1 ? "reply" : "replies"}</span>
+                  </div>
+                </button>
+              `;
+            }).join("") : `<p style="font-size: 12px; color: #8e87a2;">No threads in this scope yet. Start one to open the conversation.</p>`}
+          </div>
+
+          ${active ? `
+            <section class="panel" style="padding: 0; overflow: hidden;">
+              <div class="panel-head" style="padding: 14px 16px;">
+                <div>
+                  <div class="panel-title">${active.title}</div>
+                  <span class="panel-meta">${threadScopeMeta(active).label}${active.batch_id ? " · " + active.batch_id : ""}${active.subject ? " · " + active.subject : ""}${active.recipient_faculty_name ? " · " + active.recipient_faculty_name : ""}</span>
+                </div>
+                <button type="button" class="muted-btn" id="btn-close-active-thread">Close</button>
+              </div>
+              ${active.body ? `<p style="padding: 0 16px 12px; font-size: 12px; color: #cfc2ff; line-height: 1.45;">${active.body}</p>` : ""}
+              <div style="padding: 0 16px 12px; display: grid; gap: 8px; max-height: 360px; overflow-y: auto;">
+                ${(active.messages || []).length ? (active.messages || []).map((m) => `
+                  <div style="padding: 10px 12px; border-radius: 10px; background: rgba(255,255,255,0.03); border: 1px solid rgba(147,133,204,0.12);">
+                    <div style="display: flex; justify-content: space-between; gap: 8px;">
+                      <strong style="font-size: 11px; color: #f4f1ff;">${m.author_name || "Member"}</strong>
+                      <span style="font-size: 9px; color: #8e87a2;">${m.author_role || ""} · ${m.created_at ? formatDeadline(m.created_at) : ""}</span>
+                    </div>
+                    <p style="margin: 6px 0 0; font-size: 12px; color: #d8d3ea; line-height: 1.45;">${m.body}</p>
+                  </div>
+                `).join("") : `<p style="font-size: 11px; color: #8e87a2;">No replies yet. Be the first to continue the thread.</p>`}
+              </div>
+              <form id="form-thread-reply" style="padding: 12px 16px 16px; border-top: 1px solid rgba(147,133,204,0.12); display: grid; gap: 8px;">
+                <textarea id="thread-reply-input" class="field-input" style="height: 64px; resize: none;" placeholder="${isFaculty && String(active.scope_type).toLowerCase() === "batch" ? "Post a batch announcement (students are emailed)…" : "Write a reply…"}" required></textarea>
+                <div style="display: flex; justify-content: flex-end;">
+                  <button type="submit" class="primary-btn">${getIcon("threads", 13)} Send</button>
+                </div>
+              </form>
+            </section>
+          ` : ""}
         </div>
       </div>
     `;
@@ -1964,6 +2490,8 @@
         return renderManageBatchesModal();
       case "thread":
         return renderStartThreadModal();
+      case "attendance_roster":
+        return renderAttendanceRosterModal();
       default:
         return "";
     }
@@ -2283,26 +2811,190 @@
   }
 
   function renderStartThreadModal() {
+    const isFaculty = state.role === "faculty";
+    const scope = state.threadComposeScope || "public";
+    const subjects = facultyNoteSubjects();
+    const batches = (state.batches || []).length
+      ? state.batches
+      : [{ name: "CS-2A" }, { name: "CS-1B" }];
+    const faculty = state.people || [];
+    const studentBatch = (state.user && state.user.batch_id) || "CS-2A";
+
     return `
       <div class="modal-backdrop" id="modal-backdrop">
         <div class="modal" onclick="event.stopPropagation()">
           <div class="modal-head">
             <div>
-              <h2>Start a New Thread</h2>
-              <p>Open a clear loop for your class to think together.</p>
+              <h2>${isFaculty ? "Start a thread or announcement" : "Start a thread or faculty DM"}</h2>
+              <p>Choose who can see this conversation. Public threads stay silent on email; batch announcements and private DMs notify the right inbox.</p>
             </div>
             <button class="close-btn" id="btn-close-modal">${getIcon("close", 16)}</button>
           </div>
 
           <form id="form-start-thread">
-            <label class="field-label" for="thread-title-input">Thread Title</label>
-            <input id="thread-title-input" class="field-input" required placeholder="What are we exploring?" />
+            <label class="field-label">Scope</label>
+            <div id="thread-scope-choices" style="display: grid; gap: 8px; margin-bottom: 12px;">
+              <label class="field-input" style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                <input type="radio" name="thread_scope" value="public" ${scope === "public" ? "checked" : ""} />
+                Public discussion — visible to everyone, no email blast
+              </label>
+              <label class="field-input" style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                <input type="radio" name="thread_scope" value="batch" ${scope === "batch" ? "checked" : ""} />
+                Course batch — ${isFaculty ? "emails enrolled students when you post" : "visible to your batch and subject"}
+              </label>
+              <label class="field-input" style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                <input type="radio" name="thread_scope" value="private" ${scope === "private" ? "checked" : ""} />
+                Private faculty DM — emails the professor
+              </label>
+            </div>
+
+            <label class="field-label" for="thread-title-input">${scope === "private" ? "Message title" : "Thread title"}</label>
+            <input id="thread-title-input" class="field-input" required placeholder="${scope === "private" ? "e.g. Office hours question" : "What are we exploring?"}" />
+
+            <label class="field-label" for="thread-body-input">Opening message</label>
+            <textarea id="thread-body-input" class="field-input" style="height: 72px; resize: none;" placeholder="Write the first post…"></textarea>
+
+            <div id="thread-batch-fields" style="display: ${scope === "batch" ? "grid" : "none"}; gap: 10px;">
+              <div>
+                <label class="field-label" for="thread-batch-input">Batch</label>
+                ${isFaculty ? `
+                  <select id="thread-batch-input" class="field-input">
+                    ${batches.map((b) => `<option value="${b.name}">${b.name}${b.subject ? " · " + b.subject : ""}</option>`).join("")}
+                  </select>
+                ` : `
+                  <input id="thread-batch-input" class="field-input" value="${studentBatch}" readonly />
+                `}
+              </div>
+              <div>
+                <label class="field-label" for="thread-subject-input">Subject</label>
+                <select id="thread-subject-input" class="field-input">
+                  ${subjects.map((s) => `<option value="${s}">${s}</option>`).join("")}
+                </select>
+              </div>
+            </div>
+
+            <div id="thread-faculty-fields" style="display: ${scope === "private" ? "grid" : "none"}; gap: 10px;">
+              <label class="field-label" for="thread-faculty-input">Faculty recipient</label>
+              <select id="thread-faculty-input" class="field-input">
+                ${faculty.map((f) => `<option value="${f.id}">${f.full_name || f.name}${f.email ? " · " + f.email : ""}</option>`).join("")}
+              </select>
+            </div>
 
             <div class="modal-actions">
               <button type="button" class="secondary-btn" id="btn-cancel-modal">Cancel</button>
-              <button type="submit" class="primary-btn">Start Thread</button>
+              <button type="submit" class="primary-btn">${scope === "private" ? "Send private message" : "Start thread"}</button>
             </div>
           </form>
+        </div>
+      </div>
+    `;
+  }
+
+  // --- Attendance Smart Roster Modal ---
+  function renderAttendanceRosterModal() {
+    const roster = state.attendanceRoster;
+    if (!roster) {
+      return `
+        <div class="modal-backdrop" id="modal-backdrop">
+          <div class="modal" onclick="event.stopPropagation()">
+            <div class="modal-head">
+              <div><h2>Attendance Roster</h2><p>Loading...</p></div>
+              <button class="close-btn" id="btn-close-modal">${getIcon("close", 16)}</button>
+            </div>
+            <div style="padding: 32px; text-align: center;"><span class="spinner"></span></div>
+          </div>
+        </div>
+      `;
+    }
+
+    const { class_id, subject, batch, class_date, start_time, faculty_name, total_enrolled, present_count, roster: rows } = roster;
+    const absent_count = total_enrolled - present_count;
+    const pct = total_enrolled > 0 ? Math.round((present_count / total_enrolled) * 100) : 0;
+
+    const statusColor = (s) => {
+      if (s === "Present") return { bg: "rgba(72,199,142,0.15)", text: "#48c78e", border: "rgba(72,199,142,0.3)" };
+      if (s === "Late") return { bg: "rgba(255,193,7,0.15)", text: "#ffc107", border: "rgba(255,193,7,0.3)" };
+      return { bg: "rgba(255,107,107,0.12)", text: "#ff8b7b", border: "rgba(255,107,107,0.25)" };
+    };
+
+    const cycleStatus = (current) => {
+      if (current === "Present") return "Late";
+      if (current === "Late") return "Absent";
+      return "Present";
+    };
+
+    return `
+      <div class="modal-backdrop" id="modal-backdrop">
+        <div class="modal" style="width: min(680px, 96vw); max-height: 90vh; display: flex; flex-direction: column;" onclick="event.stopPropagation()">
+          <!-- Header -->
+          <div class="modal-head" style="flex-shrink: 0;">
+            <div>
+              <h2 style="display: flex; align-items: center; gap: 8px;">${getIcon("attendance", 18)} Attendance & Logs</h2>
+              <p>${subject} · Batch ${batch} · ${class_date || "Today"} ${start_time || ""} · Faculty: ${faculty_name || "—"}</p>
+            </div>
+            <button class="close-btn" id="btn-close-modal">${getIcon("close", 16)}</button>
+          </div>
+
+          <!-- Stats Bar -->
+          <div style="flex-shrink: 0; display: flex; gap: 12px; padding: 14px 20px; background: rgba(167,139,250,0.06); border-bottom: 1px solid rgba(147,133,204,0.14);">
+            <div style="flex: 1; text-align: center;">
+              <div style="font-size: 22px; font-weight: 800; color: #48c78e;">${present_count}</div>
+              <div style="font-size: 9px; color: #8e87a2; text-transform: uppercase; letter-spacing: 0.08em;">Present</div>
+            </div>
+            <div style="flex: 1; text-align: center;">
+              <div style="font-size: 22px; font-weight: 800; color: #ff8b7b;">${absent_count}</div>
+              <div style="font-size: 9px; color: #8e87a2; text-transform: uppercase; letter-spacing: 0.08em;">Absent</div>
+            </div>
+            <div style="flex: 1; text-align: center;">
+              <div style="font-size: 22px; font-weight: 800; color: #a78bfa;">${pct}%</div>
+              <div style="font-size: 9px; color: #8e87a2; text-transform: uppercase; letter-spacing: 0.08em;">Attendance</div>
+            </div>
+            <div style="flex: 1; text-align: center;">
+              <div style="font-size: 22px; font-weight: 800; color: #f4f1ff;">${total_enrolled}</div>
+              <div style="font-size: 9px; color: #8e87a2; text-transform: uppercase; letter-spacing: 0.08em;">Enrolled</div>
+            </div>
+          </div>
+
+          <!-- Instructions -->
+          <div style="flex-shrink: 0; padding: 10px 20px; background: rgba(167,139,250,0.04); border-bottom: 1px solid rgba(147,133,204,0.1); font-size: 10px; color: #9d94bf; display: flex; align-items: center; gap: 7px;">
+            ${getIcon("sparkles", 12)}
+            <span>Click any status badge to toggle: <strong style="color:#48c78e">Present</strong> → <strong style="color:#ffc107">Late</strong> → <strong style="color:#ff8b7b">Absent</strong>. Auto-populated from student check-ins.</span>
+          </div>
+
+          <!-- Roster List -->
+          <div id="attendance-roster-list" style="flex: 1; overflow-y: auto; padding: 12px 20px; display: grid; gap: 6px;">
+            ${(rows || []).map((r, idx) => {
+      const sc = statusColor(r.status);
+      const initials = String(r.student_name || "").split(" ").map(n => n[0]).join("").slice(0, 2).toUpperCase();
+      const ts = r.timestamp ? new Date(r.timestamp).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" }) : null;
+      return `
+                <div class="attendance-row" data-idx="${idx}" data-student-id="${r.student_id}" data-student-name="${r.student_name || ""}" data-batch-id="${r.batch_id || ""}" data-status="${r.status}" style="display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-radius: 10px; background: rgba(255,255,255,0.02); border: 1px solid rgba(147,133,204,0.12); transition: border-color 0.15s;">
+                  <div style="width: 32px; height: 32px; border-radius: 50%; background: rgba(167,139,250,0.18); color: #a78bfa; font-size: 11px; font-weight: 700; display: flex; align-items: center; justify-content: center; flex-shrink: 0;">${initials}</div>
+                  <div style="flex: 1; min-width: 0;">
+                    <div style="font-size: 12px; font-weight: 700; color: #f4f1ff;">${r.student_name}</div>
+                    <div style="font-size: 10px; color: #8e87a2;">ID: ${r.student_id} · Batch: ${r.batch_id || batch}${ts ? " · Checked in: " + ts : ""}</div>
+                  </div>
+                  <button type="button" class="attendance-status-toggle" data-idx="${idx}" style="cursor: pointer; font-size: 10px; font-weight: 700; padding: 5px 12px; border-radius: 6px; border: 1px solid ${sc.border}; background: ${sc.bg}; color: ${sc.text}; font-family: inherit; transition: all 0.15s;">
+                    ${r.status}
+                  </button>
+                  ${r.verified_by_faculty ? `<span style="font-size: 9px; color: #a78bfa; opacity: 0.7;">${getIcon("check", 10)} Faculty</span>` : ""}
+                </div>
+              `;
+    }).join("")}
+          </div>
+
+          <!-- Actions -->
+          <div class="modal-actions" style="flex-shrink: 0; border-top: 1px solid rgba(147,133,204,0.14); padding-top: 14px;">
+            <a href="/api/attendance/session/${class_id}/export" class="secondary-btn" download style="display: inline-flex; align-items: center; gap: 7px; text-decoration: none;">
+              ${getIcon("download", 13)} Download CSV
+            </a>
+            <div style="margin-left: auto; display: flex; gap: 8px;">
+              <button type="button" class="secondary-btn" id="btn-cancel-modal">Close</button>
+              <button type="button" class="primary-btn" id="btn-save-attendance" ${state.loading ? "disabled" : ""}>
+                ${state.loading ? `<span class="spinner"></span>` : `${getIcon("check", 13)} Save & Finalize Roster`}
+              </button>
+            </div>
+          </div>
         </div>
       </div>
     `;
@@ -2408,7 +3100,54 @@
     if (btnSuddenClassView) btnSuddenClassView.addEventListener("click", () => { state.activeModal = "sudden_class"; render(); });
 
     const btnOpenThread = document.getElementById("btn-open-thread-modal");
-    if (btnOpenThread) btnOpenThread.addEventListener("click", () => { state.activeModal = "thread"; render(); });
+    if (btnOpenThread) {
+      btnOpenThread.addEventListener("click", () => {
+        state.threadComposeScope = "public";
+        state.activeModal = "thread";
+        render();
+      });
+    }
+
+    const threadScopeFilters = document.getElementById("thread-scope-filters");
+    if (threadScopeFilters) {
+      threadScopeFilters.addEventListener("click", (event) => {
+        const btn = event.target.closest("[data-thread-scope]");
+        if (!btn) return;
+        state.threadScopeFilter = btn.dataset.threadScope || "all";
+        render();
+      });
+    }
+
+    document.querySelectorAll('[data-action="open-thread"]').forEach((btn) => {
+      btn.addEventListener("click", () => {
+        api.loadThread(Number(btn.dataset.id));
+      });
+    });
+
+    const closeThread = document.getElementById("btn-close-active-thread");
+    if (closeThread) {
+      closeThread.addEventListener("click", () => {
+        state.activeThread = null;
+        render();
+      });
+    }
+
+    const replyForm = document.getElementById("form-thread-reply");
+    if (replyForm) {
+      replyForm.addEventListener("submit", (e) => {
+        e.preventDefault();
+        const input = document.getElementById("thread-reply-input");
+        const body = input && input.value.trim();
+        if (body && state.activeThread) {
+          api.postThreadMessage(state.activeThread.id, body);
+        }
+      });
+    }
+
+    const btnPrintAttendance = document.getElementById("btn-print-attendance-report");
+    if (btnPrintAttendance) {
+      btnPrintAttendance.addEventListener("click", () => window.print());
+    }
 
     const uploadNotesForm = document.getElementById("upload-notes-form");
     if (uploadNotesForm) {
@@ -2433,9 +3172,17 @@
 
     // Meet launch buttons
     document.querySelectorAll('[data-action="launch-meet"]').forEach((btn) => {
-      btn.addEventListener("click", () => {
+      btn.addEventListener("click", async () => {
         const id = btn.dataset.id;
-        api.launchMeet(id);
+        await api.launchMeetWithCheckIn(id);
+      });
+    });
+
+    // Attendance roster view (faculty timetable)
+    document.querySelectorAll('[data-action="view-attendance"]').forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const id = Number(btn.dataset.id);
+        api.loadSessionRoster(id);
       });
     });
 
@@ -2641,16 +3388,78 @@
     // Start Thread Form
     const formThread = document.getElementById("form-start-thread");
     if (formThread) {
+      formThread.querySelectorAll('input[name="thread_scope"]').forEach((radio) => {
+        radio.addEventListener("change", () => {
+          state.threadComposeScope = radio.value;
+          const batchFields = document.getElementById("thread-batch-fields");
+          const facultyFields = document.getElementById("thread-faculty-fields");
+          if (batchFields) batchFields.style.display = radio.value === "batch" ? "grid" : "none";
+          if (facultyFields) facultyFields.style.display = radio.value === "private" ? "grid" : "none";
+        });
+      });
       formThread.addEventListener("submit", (e) => {
         e.preventDefault();
         const title = document.getElementById("thread-title-input").value.trim();
-        if (title) {
-          state.threads.unshift({ title, by: state.user?.name || "Member", count: 0 });
-          showToast(`Discussion thread created: "${title}"`);
-          state.activeModal = null;
-          render();
+        const body = (document.getElementById("thread-body-input") || {}).value || "";
+        const scopeEl = formThread.querySelector('input[name="thread_scope"]:checked');
+        const scope_type = (scopeEl && scopeEl.value) || "public";
+        if (!title) return;
+        const payload = { title, body: body.trim(), scope_type };
+        if (scope_type === "batch") {
+          payload.batch_id = (document.getElementById("thread-batch-input") || {}).value;
+          payload.subject = (document.getElementById("thread-subject-input") || {}).value;
         }
+        if (scope_type === "private") {
+          const facVal = (document.getElementById("thread-faculty-input") || {}).value;
+          payload.recipient_faculty_id = facVal ? Number(facVal) : null;
+        }
+        api.createThread(payload);
       });
+    }
+
+    // Attendance Roster Modal — toggle & save
+    const rosterList = document.getElementById("attendance-roster-list");
+    if (rosterList && state.attendanceRoster) {
+      // Maintain a local mutable copy of roster statuses for toggling
+      const localRoster = (state.attendanceRoster.roster || []).map(r => ({ ...r }));
+
+      rosterList.addEventListener("click", (e) => {
+        const toggleBtn = e.target.closest(".attendance-status-toggle");
+        if (!toggleBtn) return;
+        const idx = Number(toggleBtn.dataset.idx);
+        if (isNaN(idx) || !localRoster[idx]) return;
+
+        const cycle = { Present: "Late", Late: "Absent", Absent: "Present" };
+        localRoster[idx].status = cycle[localRoster[idx].status] || "Present";
+
+        // Update the parent row's data-status and re-style the button
+        const row = rosterList.querySelector(`.attendance-row[data-idx="${idx}"]`);
+        if (row) row.dataset.status = localRoster[idx].status;
+
+        const statusColors = {
+          Present: { bg: "rgba(72,199,142,0.15)", text: "#48c78e", border: "rgba(72,199,142,0.3)" },
+          Late: { bg: "rgba(255,193,7,0.15)", text: "#ffc107", border: "rgba(255,193,7,0.3)" },
+          Absent: { bg: "rgba(255,107,107,0.12)", text: "#ff8b7b", border: "rgba(255,107,107,0.25)" }
+        };
+        const sc = statusColors[localRoster[idx].status];
+        toggleBtn.textContent = localRoster[idx].status;
+        toggleBtn.style.background = sc.bg;
+        toggleBtn.style.color = sc.text;
+        toggleBtn.style.borderColor = sc.border;
+      });
+
+      const saveBtn = document.getElementById("btn-save-attendance");
+      if (saveBtn) {
+        saveBtn.addEventListener("click", () => {
+          const overrides = localRoster.map(r => ({
+            student_id: r.student_id,
+            student_name: r.student_name,
+            batch_id: r.batch_id,
+            status: r.status
+          }));
+          api.saveAttendanceOverrides(state.attendanceRoster.class_id, overrides);
+        });
+      }
     }
   }
 

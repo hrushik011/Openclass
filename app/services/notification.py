@@ -98,3 +98,61 @@ class NotificationService:
                     ("sms", "sms_dispatch", "failed", f"To: {phone_number} | Error: {str(e)}", now()),
                 )
             return False
+
+    @classmethod
+    def broadcast_assignment_created(cls, assignment: dict, recipients: List[dict]) -> int:
+        title = assignment.get("title", "New Assignment")
+        batch_id = assignment.get("batch_id", "")
+        deadline = assignment.get("deadline", "")
+        subject = assignment.get("subject", "Academic Course")
+        faculty_name = assignment.get("faculty_name", "Course Faculty")
+        description = assignment.get("description") or "Please review instructions and submit on time."
+        email_subject = f"New Assignment: {title} · {batch_id}"
+        email_body = (
+            f"A new assignment has been posted for batch {batch_id}.\n\n"
+            f"Title: {title}\nSubject: {subject}\nFaculty: {faculty_name}\nDeadline: {deadline}\n\n"
+            f"{description}\n\nOpenClass Academic System"
+        )
+        sent = 0
+        for r in recipients:
+            email = r.get("email")
+            if email and cls.send_email(email, email_subject, email_body):
+                sent += 1
+        return sent
+
+    @classmethod
+    def notify_faculty_direct_message(cls, faculty_email: str, thread: dict, sender_name: str, preview: str) -> bool:
+        if not faculty_email:
+            return False
+        title = thread.get("title", "Private message")
+        email_subject = f"OpenClass DM: {title}"
+        email_body = (
+            f"You have a private message on OpenClass.\n\n"
+            f"From: {sender_name}\n"
+            f"Thread: {title}\n\n"
+            f"{preview}\n\n"
+            f"Log in to OpenClass → Class Threads → Private Faculty DMs to reply.\n"
+        )
+        return cls.send_email(faculty_email, email_subject, email_body)
+
+    @classmethod
+    def notify_batch_thread_announcement(cls, recipients: List[dict], thread: dict, poster_name: str, preview: str) -> int:
+        title = thread.get("title", "Course announcement")
+        batch_id = thread.get("batch_id") or ""
+        subject = thread.get("subject") or "Course"
+        email_subject = f"OpenClass [{batch_id}] {subject}: {title}"
+        email_body = (
+            f"A new announcement was posted in your course thread.\n\n"
+            f"Batch: {batch_id}\n"
+            f"Subject: {subject}\n"
+            f"From: {poster_name}\n"
+            f"Thread: {title}\n\n"
+            f"{preview}\n\n"
+            f"Open Class Threads in OpenClass to read and reply.\n"
+        )
+        sent = 0
+        for r in recipients:
+            email = r.get("email")
+            if email and cls.send_email(email, email_subject, email_body):
+                sent += 1
+        return sent
