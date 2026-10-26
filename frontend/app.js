@@ -1451,6 +1451,8 @@
                 ${getIcon("bell", 15)}
               </button>
 
+              ${!isFaculty ? renderOverallAttendancePill() : ""}
+
               <div class="avatar" title="${user.name} (${user.role})">${initials}</div>
 
               <!-- Clean Topbar Sign Out Button -->
@@ -1948,8 +1950,11 @@
             <h1 class="hero-title">Good morning, <span class="accent">${user.name || "Student"}.</span></h1>
             <p class="hero-copy">Your personalized learning space, arranged around lectures, submissions, and class notes.</p>
           </div>
-          <div class="date-note">
-            Synced via <b>Microsoft 365 OIDC</b>
+          <div style="display: flex; flex-direction: column; align-items: flex-end; gap: 8px;">
+            ${renderOverallAttendancePill()}
+            <div class="date-note">
+              Synced via <b>Microsoft 365 OIDC</b>
+            </div>
           </div>
         </div>
 
