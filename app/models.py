@@ -1,4 +1,4 @@
-"""SQLAlchemy Models for OpenClass."""
+"""SQLAlchemy Models for Openclass."""
 
 from datetime import datetime, timezone
 from sqlalchemy import (

@@ -1,0 +1,684 @@
+/* === Openclass · Reducto white-and-purple design system === */
+
+:root,
+html[data-theme="light"] {
+  --oc-bg: #faf9f6;
+  --oc-bg-alt: #f8fafc;
+  --oc-card: #ffffff;
+  --oc-border: #e5e7eb;
+  --oc-radius: 6px;
+  --oc-purple: #7c3aed;
+  --oc-purple-soft: rgba(124, 58, 237, 0.1);
+  --oc-text: #0f172a;
+  --oc-muted: #475569;
+  --oc-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+
+html[data-theme="dark"] {
+  --oc-bg: #0f172a;
+  --oc-bg-alt: #111827;
+  --oc-card: #1e293b;
+  --oc-border: #334155;
+  --oc-radius: 6px;
+  --oc-purple: #8b5cf6;
+  --oc-purple-soft: rgba(139, 92, 246, 0.16);
+  --oc-text: #f8fafc;
+  --oc-muted: #94a3b8;
+  --oc-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+}
+
+html,
+body,
+#app {
+  background: var(--oc-bg) !important;
+  color: var(--oc-text) !important;
+}
+
+.shell,
+.main,
+.content,
+.sidebar {
+  background: var(--oc-bg) !important;
+  color: var(--oc-text) !important;
+}
+
+.main,
+.content {
+  background: var(--oc-bg-alt) !important;
+}
+
+.sidebar {
+  background: var(--oc-card) !important;
+  border-right: 1px solid var(--oc-border) !important;
+}
+
+.topbar,
+.reducto-topbar {
+  background: #f3e8ff !important;
+  border-bottom: 1px solid rgba(107, 33, 168, 0.12) !important;
+  box-shadow: none !important;
+  color: #0f172a !important;
+}
+
+html[data-theme="dark"] .topbar,
+html[data-theme="dark"] .reducto-topbar {
+  background: rgba(139, 92, 246, 0.18) !important;
+  border-bottom-color: rgba(139, 92, 246, 0.28) !important;
+  color: #f8fafc !important;
+}
+
+.panel,
+.class-card,
+.management-card,
+.faculty-overview,
+.feed-panel,
+.graph-panel,
+.schedule-panel,
+.login-card,
+.modal,
+.batch-card,
+.assignment-card,
+.hub-filter-panel {
+  background: var(--oc-card) !important;
+  border: 1px solid var(--oc-border) !important;
+  border-radius: var(--oc-radius) !important;
+  box-shadow: var(--oc-shadow) !important;
+  color: var(--oc-text) !important;
+}
+
+.hero-title,
+.hero-title .accent,
+.login-title,
+.brand-name,
+.panel-title,
+.profile-name,
+.assignment-card-title,
+.class-title {
+  color: var(--oc-text) !important;
+}
+
+.hero-copy,
+.login-sub,
+.panel-meta,
+.profile-role,
+.eyebrow,
+.date-note,
+.breadcrumb,
+.breadcrumb span,
+.breadcrumb strong {
+  color: var(--oc-muted) !important;
+}
+
+.primary-btn,
+.meet-btn,
+.mini-btn.primary {
+  background: #7c3aed !important;
+  border: 1px solid #7c3aed !important;
+  color: #ffffff !important;
+  border-radius: var(--oc-radius) !important;
+  box-shadow: none !important;
+}
+
+.primary-btn:hover,
+.meet-btn:hover {
+  background: #6d28d9 !important;
+  border-color: #6d28d9 !important;
+}
+
+.secondary-btn,
+.muted-btn,
+.topbar-signout-btn,
+.sidebar-signout-btn,
+.icon-btn {
+  background: var(--oc-card) !important;
+  border: 1px solid var(--oc-border) !important;
+  color: var(--oc-text) !important;
+  border-radius: var(--oc-radius) !important;
+}
+
+.nav-item {
+  color: var(--oc-muted) !important;
+  border-radius: var(--oc-radius) !important;
+}
+
+.nav-item.active {
+  background: var(--oc-purple-soft) !important;
+  color: #7c3aed !important;
+  border: 1px solid rgba(124, 58, 237, 0.25) !important;
+}
+
+.field-input,
+.command-search,
+.command-search input {
+  background: var(--oc-card) !important;
+  border: 1px solid var(--oc-border) !important;
+  color: var(--oc-text) !important;
+  border-radius: var(--oc-radius) !important;
+}
+
+.command-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+}
+
+.command-search input {
+  border: 0 !important;
+  background: transparent !important;
+  color: var(--oc-text) !important;
+}
+
+.avatar {
+  background: var(--oc-purple-soft) !important;
+  color: #7c3aed !important;
+  border: 1px solid rgba(124, 58, 237, 0.2) !important;
+}
+
+.login-screen {
+  background: var(--oc-bg-alt) !important;
+}
+
+.login-card {
+  background: var(--oc-card) !important;
+  border: 1px solid var(--oc-border) !important;
+  border-radius: var(--oc-radius) !important;
+}
+
+.shell {
+  display: flex !important;
+  flex-direction: row !important;
+}
+
+.sidebar .brand,
+.sidebar .reducto-brand,
+.sidebar .sidebar-brand {
+  display: none !important;
+}
+
+.sidebar-logo-wrap {
+  display: none !important;
+}
+
+.brand-mark,
+.oc-logo-mark {
+  height: 2.5rem;
+  width: auto;
+  max-height: 2.5rem;
+  object-fit: contain;
+  display: block;
+  flex-shrink: 0;
+}
+
+html[data-theme="light"] .oc-logo-mark {
+  filter: invert(1);
+}
+
+html[data-theme="dark"] .oc-logo-mark {
+  filter: none;
+}
+
+.reducto-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 64px;
+  padding: 10px 20px !important;
+}
+
+.reducto-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 160px;
+}
+
+.reducto-topbar .reducto-brand {
+  gap: 12px;
+  align-items: center;
+}
+
+.reducto-brand-name {
+  font-family: "Space Grotesk", "Manrope", sans-serif;
+  font-weight: 700;
+  font-size: 1.35rem;
+  letter-spacing: -0.04em;
+  line-height: 1;
+  color: #0f172a;
+}
+
+html[data-theme="dark"] .reducto-brand-name {
+  color: #f8fafc;
+}
+
+html[data-theme="light"] .reducto-topbar .command-search,
+html[data-theme="light"] .reducto-topbar .theme-toggle-btn,
+html[data-theme="light"] .reducto-topbar .topbar-signout-btn {
+  background: rgba(255, 255, 255, 0.72) !important;
+  border-color: rgba(107, 33, 168, 0.16) !important;
+  color: #0f172a !important;
+}
+
+.attendance-status-strip {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 10px 0 18px;
+  padding: 8px 12px;
+  background: var(--oc-card);
+  border: 1px solid var(--oc-border);
+  border-radius: var(--oc-radius);
+  font-size: 12px;
+  color: var(--oc-muted);
+}
+
+.attendance-status-strip strong {
+  font-size: 13px;
+}
+
+.attendance-status-strip .mini-track {
+  flex: 1;
+  max-width: 180px;
+  height: 6px;
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.theme-toggle-btn {
+  width: 34px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--oc-radius);
+  border: 1px solid var(--oc-border);
+  background: var(--oc-card);
+  color: var(--oc-text);
+  cursor: pointer;
+}
+
+.people-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.person-card {
+  display: flex !important;
+  align-items: center;
+  gap: 14px;
+  padding: 16px 18px !important;
+  min-height: 0 !important;
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+  background: #ffffff !important;
+  border: 1px solid #e5e7eb !important;
+  border-radius: 6px !important;
+  box-shadow: none !important;
+}
+
+.person-avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 999px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 700;
+  background: var(--oc-purple-soft);
+  color: #7c3aed;
+}
+
+.person-copy {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.person-copy strong {
+  color: var(--oc-text) !important;
+  font-size: 14px;
+  line-height: 1.3;
+}
+
+.person-copy span,
+.person-copy small {
+  color: var(--oc-muted) !important;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.person-actions {
+  flex-shrink: 0;
+}
+
+html[data-theme="dark"] .person-card {
+  background: var(--oc-card) !important;
+  border-color: var(--oc-border) !important;
+}
+
+.top-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.login-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.command-search:focus-within,
+.field-input:focus,
+input:focus,
+textarea:focus {
+  border-color: #7c3aed !important;
+  box-shadow: 0 0 0 3px rgba(124, 58, 237, 0.15) !important;
+  outline: none;
+}
+
+.sso-btn,
+.quick-action,
+.status-pill,
+.muted-btn {
+  border-radius: var(--oc-radius) !important;
+}
+
+.faculty-stat strong,
+.management-copy strong,
+.assignment-row strong,
+.count,
+.class-sub,
+.nav-label,
+.profile-name {
+  color: var(--oc-text) !important;
+}
+
+html[data-theme="dark"] .attendance-status-strip,
+html[data-theme="dark"] .panel,
+html[data-theme="dark"] .class-card {
+  background: var(--oc-card) !important;
+}
+
+.attendance-subject-row {
+  padding: 12px 14px;
+  border-radius: 6px;
+  background: var(--oc-bg-alt);
+  border: 1px solid var(--oc-border);
+}
+
+.attendance-subject-row strong {
+  color: var(--oc-text);
+}
+
+/* Light-mode contrast: override dark-theme leftovers in style.css + inline hex */
+html[data-theme="light"] .login-title,
+html[data-theme="light"] .login-sub,
+html[data-theme="light"] .login-divider,
+html[data-theme="light"] .role-tab-btn,
+html[data-theme="light"] .demo-title,
+html[data-theme="light"] .demo-chip,
+html[data-theme="light"] .assignment-card-title,
+html[data-theme="light"] .assignment-card-meta,
+html[data-theme="light"] .mini-btn,
+html[data-theme="light"] .host-badge-chip,
+html[data-theme="light"] .class-sub,
+html[data-theme="light"] .class-overline,
+html[data-theme="light"] .count-label,
+html[data-theme="light"] .management-copy,
+html[data-theme="light"] .management-copy span,
+html[data-theme="light"] .faculty-stat span,
+html[data-theme="light"] .nav-label,
+html[data-theme="light"] .panel-meta,
+html[data-theme="light"] .hero-copy,
+html[data-theme="light"] .eyebrow,
+html[data-theme="light"] .date-note,
+html[data-theme="light"] .profile-role {
+  color: var(--oc-muted) !important;
+}
+
+html[data-theme="light"] .login-title,
+html[data-theme="light"] .assignment-card-title,
+html[data-theme="light"] .class-title,
+html[data-theme="light"] .panel-title,
+html[data-theme="light"] .hero-title,
+html[data-theme="light"] .hero-title .accent,
+html[data-theme="light"] .faculty-stat strong,
+html[data-theme="light"] .management-copy strong,
+html[data-theme="light"] .count,
+html[data-theme="light"] table td,
+html[data-theme="light"] table th,
+html[data-theme="light"] .modal h2,
+html[data-theme="light"] .modal p,
+html[data-theme="light"] .modal label,
+html[data-theme="light"] .modal strong {
+  color: var(--oc-text) !important;
+}
+
+html[data-theme="light"] .login-sub,
+html[data-theme="light"] .assignment-card-meta,
+html[data-theme="light"] table th,
+html[data-theme="light"] .panel-meta,
+html[data-theme="light"] .class-sub,
+html[data-theme="light"] .eyebrow,
+html[data-theme="light"] .date-note,
+html[data-theme="light"] .hero-copy,
+html[data-theme="light"] .profile-role,
+html[data-theme="light"] .demo-title,
+html[data-theme="light"] .login-divider {
+  color: var(--oc-muted) !important;
+}
+
+html[data-theme="light"] .mini-btn:not(.primary):not(.danger) {
+  color: var(--oc-text) !important;
+  border-color: var(--oc-border) !important;
+}
+
+html[data-theme="light"] .role-tab-btn.active {
+  color: #ffffff !important;
+}
+
+html[data-theme="light"] .sso-ms {
+  background: var(--oc-card) !important;
+  color: var(--oc-text) !important;
+  border: 1px solid var(--oc-border) !important;
+}
+
+html[data-theme="light"] .role-tabs {
+  background: var(--oc-bg-alt) !important;
+  border-color: var(--oc-border) !important;
+}
+
+html[data-theme="light"] [style*="color: #f4f1ff"],
+html[data-theme="light"] [style*="color:#f4f1ff"],
+html[data-theme="light"] [style*="color: #f7f5ff"],
+html[data-theme="light"] [style*="color: #f3efff"],
+html[data-theme="light"] [style*="color: #f2effc"],
+html[data-theme="light"] [style*="color: #d8d3ea"],
+html[data-theme="light"] [style*="color: #dcd4ff"] {
+  color: #0f172a !important;
+}
+
+html[data-theme="light"] [style*="color: #8e87a2"],
+html[data-theme="light"] [style*="color:#8e87a2"],
+html[data-theme="light"] [style*="color: #9d94bf"],
+html[data-theme="light"] [style*="color: #b3aec5"],
+html[data-theme="light"] [style*="color: #cfc2ff"],
+html[data-theme="light"] [style*="color: #8c879d"],
+html[data-theme="light"] [style*="color: #c5c0d6"],
+html[data-theme="light"] [style*="color: #aba5be"] {
+  color: #475569 !important;
+}
+
+html[data-theme="light"] .primary-btn,
+html[data-theme="light"] .meet-btn,
+html[data-theme="light"] .mini-btn.primary,
+html[data-theme="light"] .role-tab-btn.active {
+  color: #ffffff !important;
+}
+
+html[data-theme="light"] .hub-filter-panel,
+html[data-theme="light"] .knowledge-hub-view .panel:not(.hub-resource-card) {
+  background: #ffffff !important;
+  border: 1px solid #e5e7eb !important;
+  color: #0f172a !important;
+}
+
+html[data-theme="light"] .hub-results-count {
+  color: #475569 !important;
+}
+
+html[data-theme="light"] .notes-search-wrap {
+  background: #ffffff !important;
+  border: 1px solid #e5e7eb !important;
+}
+
+.hub-resource-card,
+html[data-theme="light"] .hub-resource-card {
+  background: linear-gradient(145deg, #1f1d2f, #151322) !important;
+  border: 1px solid rgba(167, 139, 250, 0.22) !important;
+  color: #f8fafc !important;
+}
+
+.hub-card-title,
+html[data-theme="light"] .hub-card-title {
+  color: #f8fafc !important;
+}
+
+.hub-card-filename,
+.hub-card-meta,
+.hub-meta-item,
+html[data-theme="light"] .hub-card-filename,
+html[data-theme="light"] .hub-card-meta,
+html[data-theme="light"] .hub-meta-item {
+  color: #cbd5e1 !important;
+}
+
+.hub-download-btn,
+html[data-theme="light"] .hub-download-btn {
+  color: #f8fafc !important;
+  background: rgba(167, 139, 250, 0.16) !important;
+  border: 1px solid rgba(167, 139, 250, 0.35) !important;
+}
+
+.hub-download-btn:hover,
+html[data-theme="light"] .hub-download-btn:hover {
+  color: #ffffff !important;
+  background: #7c3aed !important;
+  border-color: #7c3aed !important;
+}
+
+html[data-theme="light"] .schedule-details strong,
+html[data-theme="light"] .feed-copy strong,
+html[data-theme="light"] .count,
+html[data-theme="light"] .assignment-row strong,
+html[data-theme="light"] .timetable-view strong,
+html[data-theme="light"] .person-copy strong {
+  color: #0f172a !important;
+}
+
+html[data-theme="light"] .schedule-details span,
+html[data-theme="light"] .schedule-time,
+html[data-theme="light"] .feed-copy p,
+html[data-theme="light"] .feed-time,
+html[data-theme="light"] .class-overline,
+html[data-theme="light"] .count-label,
+html[data-theme="light"] .management-copy span,
+html[data-theme="light"] .faculty-stat span {
+  color: #475569 !important;
+}
+
+html[data-theme="light"] .notes-subject-pill,
+html[data-theme="light"] .role-tab-btn {
+  background: #ffffff !important;
+  border: 1px solid #cbd5e1 !important;
+  color: #0f172a !important;
+}
+
+html[data-theme="light"] .notes-subject-pill.active,
+html[data-theme="light"] .role-tab-btn.active {
+  background: #7c3aed !important;
+  border-color: #7c3aed !important;
+  color: #ffffff !important;
+}
+
+.notes-subject-pill.active {
+  background: #7c3aed !important;
+  border-color: #7c3aed !important;
+  color: #ffffff !important;
+}
+
+.graph-node,
+.graph-node * {
+  color: #ffffff !important;
+}
+
+.graph-node .node-kicker,
+.graph-node .node-name,
+html[data-theme="light"] .graph-node .node-kicker,
+html[data-theme="light"] .graph-node .node-name {
+  color: #ffffff !important;
+}
+
+html[data-theme="light"] .faculty-stat,
+html[data-theme="light"] .quick-action,
+html[data-theme="light"] .compact-action,
+html[data-theme="light"] .batch-card,
+html[data-theme="light"] .faculty-note,
+html[data-theme="light"] .roster-upload,
+html[data-theme="light"] .class-card,
+html[data-theme="light"] .management-card,
+html[data-theme="light"] .faculty-overview {
+  background: #ffffff !important;
+  border: 1px solid #e5e7eb !important;
+  color: #0f172a !important;
+}
+
+html[data-theme="light"] .faculty-stat,
+html[data-theme="light"] .faculty-stat span,
+html[data-theme="light"] .faculty-stat strong,
+html[data-theme="light"] .faculty-stat small,
+html[data-theme="light"] .quick-action,
+html[data-theme="light"] .quick-action strong,
+html[data-theme="light"] .quick-action span,
+html[data-theme="light"] .compact-action,
+html[data-theme="light"] .compact-action strong,
+html[data-theme="light"] .compact-action span,
+html[data-theme="light"] .batch-card,
+html[data-theme="light"] .batch-card strong,
+html[data-theme="light"] .batch-card small,
+html[data-theme="light"] .batch-kicker,
+html[data-theme="light"] .faculty-note,
+html[data-theme="light"] .faculty-note strong,
+html[data-theme="light"] .faculty-note span,
+html[data-theme="light"] .progress-ring,
+html[data-theme="light"] .progress-ring span,
+html[data-theme="light"] .text-action,
+html[data-theme="light"] .management-copy,
+html[data-theme="light"] .management-copy strong,
+html[data-theme="light"] .management-copy span,
+html[data-theme="light"] .class-title,
+html[data-theme="light"] .class-sub,
+html[data-theme="light"] .class-overline,
+html[data-theme="light"] .count,
+html[data-theme="light"] .count-label {
+  color: #0f172a !important;
+}
+
+html[data-theme="light"] .quick-action svg,
+html[data-theme="light"] .compact-action svg {
+  color: #7c3aed !important;
+}
+
+html[data-theme="light"] .quick-action:hover,
+html[data-theme="light"] .compact-action:hover {
+  background: #ffffff !important;
+  border-color: #e5e7eb !important;
+}

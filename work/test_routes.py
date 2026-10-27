@@ -24,7 +24,7 @@ from app.main import (
     AssignmentUpdate,
 )
 
-print("Starting OpenClass E2E Routes Test...")
+print("Starting Openclass E2E Routes Test...")
 
 # 1. Faculty Login
 fac_login = login(LoginRequest(email="priya.menon@college.edu", password="password123", role="FACULTY"))

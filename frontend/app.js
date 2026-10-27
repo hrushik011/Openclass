@@ -1,5 +1,5 @@
 /**
- * OpenClass — Interactive Backend-to-Frontend Binding
+ * Openclass — Interactive Backend-to-Frontend Binding
  * Single-Page Reactive Client with Live API Integration
  */
 
@@ -38,8 +38,37 @@
     threads: [],
     threadScopeFilter: "all",
     activeThread: null,
-    threadComposeScope: "public"
+    threadComposeScope: "public",
+    theme: localStorage.getItem("openclass_theme") || "light"
   };
+
+  function applyTheme() {
+    const theme = state.theme === "dark" ? "dark" : "light";
+    state.theme = theme;
+    document.documentElement.setAttribute("data-theme", theme);
+    if (document.body) document.body.setAttribute("data-theme", theme);
+  }
+  applyTheme();
+
+  function renderOpenclassLogo(size = 40) {
+    return `
+      <img
+        class="oc-logo-mark"
+        src="/assets/Openclass%20logo_3.png"
+        alt="Openclass"
+        style="height: ${size}px; width: auto;"
+      />
+    `;
+  }
+
+  function toggleTheme() {
+    state.theme = state.theme === "dark" ? "light" : "dark";
+    try {
+      localStorage.setItem("openclass_theme", state.theme);
+    } catch (e) {}
+    applyTheme();
+    render();
+  }
 
   if (state.user && state.user.role) {
     const roleUpper = state.user.role.toUpperCase();
@@ -162,6 +191,8 @@
       trash: `<svg width="${s}" height="${s}" class="${className}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>`,
       clock: `<svg width="${s}" height="${s}" class="${className}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>`,
       sparkles: `<svg width="${s}" height="${s}" class="${className}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"></path></svg>`,
+      sun: `<svg width="${s}" height="${s}" class="${className}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"></path></svg>`,
+      moon: `<svg width="${s}" height="${s}" class="${className}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 14.5A8.5 8.5 0 1 1 9.5 3 7 7 0 0 0 21 14.5z"></path></svg>`,
       logout: `<svg width="${s}" height="${s}" class="${className}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>`,
       arrowRight: `<svg width="${s}" height="${s}" class="${className}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"></line><polyline points="12 5 19 12 12 19"></polyline></svg>`,
       download: `<svg width="${s}" height="${s}" class="${className}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>`,
@@ -305,7 +336,7 @@
         window.history.replaceState({}, document.title, window.location.pathname);
       } catch { }
 
-      showToast("Signed out successfully from OpenClass.");
+      showToast("Signed out successfully from Openclass.");
       render();
     },
 
@@ -757,9 +788,12 @@
   }
 
   function ensureNotesFilterStyles() {
-    if (document.getElementById("notes-filter-styles")) return;
-    const style = document.createElement("style");
-    style.id = "notes-filter-styles";
+    let style = document.getElementById("notes-filter-styles");
+    if (!style) {
+      style = document.createElement("style");
+      style.id = "notes-filter-styles";
+      document.head.appendChild(style);
+    }
     style.textContent = `
       .notes-filter-bar {
         display: flex;
@@ -777,8 +811,8 @@
         gap: 10px;
         padding: 9px 14px;
         border-radius: 10px;
-        background: rgba(18, 17, 30, 0.65);
-        border: 1px solid rgba(147, 133, 204, 0.18);
+        background: var(--oc-card);
+        border: 1px solid var(--oc-border);
         transition: border-color 0.15s, box-shadow 0.15s;
       }
       .notes-search-wrap:focus-within {
@@ -791,11 +825,11 @@
         background: transparent;
         border: 0;
         outline: none;
-        color: #f4f1ff;
+        color: var(--oc-text);
         font-size: 13px;
         font-family: inherit;
       }
-      #notes-search-input::placeholder { color: #8e87a2; }
+      #notes-search-input::placeholder { color: var(--oc-muted); }
       #notes-subject-filters {
         display: flex;
         gap: 7px;
@@ -806,9 +840,9 @@
       #notes-subject-filters::-webkit-scrollbar { display: none; }
       .notes-subject-pill {
         flex-shrink: 0;
-        border: 1px solid rgba(147, 133, 204, 0.22);
-        background: rgba(255, 255, 255, 0.02);
-        color: #b3aec5;
+        border: 1px solid #cbd5e1;
+        background: var(--oc-card);
+        color: var(--oc-text);
         border-radius: 999px;
         padding: 6px 14px;
         font-size: 11px;
@@ -819,15 +853,15 @@
         transition: all 0.15s ease;
       }
       .notes-subject-pill:hover {
-        color: #f4f1ff;
-        border-color: rgba(167, 139, 250, 0.45);
-        background: rgba(167, 139, 250, 0.08);
+        color: var(--oc-text);
+        border-color: #7c3aed;
+        background: rgba(124, 58, 237, 0.08);
       }
       .notes-subject-pill.active {
-        background: rgba(167, 139, 250, 0.22);
-        border-color: rgba(167, 139, 250, 0.6);
+        background: #7c3aed;
+        border-color: #7c3aed;
         color: #ffffff;
-        box-shadow: 0 2px 10px rgba(167, 139, 250, 0.2);
+        box-shadow: none;
       }
       .knowledge-hub-grid {
         display: grid;
@@ -836,20 +870,21 @@
         margin-top: 16px;
       }
       .hub-resource-card {
-        background: linear-gradient(145deg, rgba(31, 29, 47, 0.75), rgba(20, 19, 31, 0.88));
-        border: 1px solid rgba(147, 133, 204, 0.16);
-        border-radius: 14px;
+        background: linear-gradient(145deg, #1f1d2f, #151322);
+        border: 1px solid rgba(167, 139, 250, 0.22);
+        border-radius: 10px;
         padding: 18px 20px;
         display: flex;
         flex-direction: column;
         justify-content: space-between;
         min-height: 195px;
+        color: #f8fafc;
         transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
       }
       .hub-resource-card:hover {
         transform: translateY(-2px);
         border-color: rgba(167, 139, 250, 0.45);
-        box-shadow: 0 12px 30px rgba(0, 0, 0, 0.4), 0 0 18px rgba(167, 139, 250, 0.12);
+        box-shadow: 0 12px 30px rgba(0, 0, 0, 0.28), 0 0 18px rgba(167, 139, 250, 0.12);
       }
       .hub-card-header {
         display: flex;
@@ -875,13 +910,13 @@
       .hub-card-title {
         font-size: 13px;
         font-weight: 700;
-        color: #f4f1ff;
+        color: #f8fafc;
         margin: 0 0 6px;
         line-height: 1.35;
       }
       .hub-card-filename {
         font-size: 10px;
-        color: #9d94bf;
+        color: #cbd5e1;
         font-family: var(--app-font-mono);
         overflow: hidden;
         text-overflow: ellipsis;
@@ -894,7 +929,7 @@
       }
       .hub-card-meta {
         font-size: 10px;
-        color: #8e87a2;
+        color: #cbd5e1;
         display: flex;
         flex-wrap: wrap;
         gap: 8px;
@@ -920,7 +955,7 @@
         border-radius: 8px;
         background: rgba(167, 139, 250, 0.12);
         border: 1px solid rgba(167, 139, 250, 0.28);
-        color: #dcd4ff;
+        color: #f8fafc;
         font-size: 10px;
         font-weight: 700;
         text-decoration: none;
@@ -934,7 +969,6 @@
         box-shadow: 0 4px 14px rgba(121, 91, 208, 0.4);
       }
     `;
-    document.head.appendChild(style);
   }
 
   function getFileBadgeInfo(filename) {
@@ -992,11 +1026,11 @@
   function renderNotesGridContent(notes) {
     if (!(state.notes || []).length) {
       return `
-        <div class="panel" style="grid-column: 1 / -1; padding: 48px 24px; text-align: center; color: #8e87a2;">
+        <div class="panel" style="grid-column: 1 / -1; padding: 48px 24px; text-align: center; color: var(--oc-muted);">
           <div style="display: inline-flex; align-items: center; justify-content: center; width: 48px; height: 48px; border-radius: 50%; background: rgba(167, 139, 250, 0.12); color: #a78bfa; margin-bottom: 12px;">
             ${getIcon("hub", 24)}
           </div>
-          <h3 style="color: #f4f1ff; font-size: 14px; margin-bottom: 6px;">Course Repository is Empty</h3>
+          <h3 style="color: var(--oc-text); font-size: 14px; margin-bottom: 6px;">Course Repository is Empty</h3>
           <p style="font-size: 11px; max-width: 420px; margin: 0 auto;">No lecture notes or course resources have been uploaded to the repository yet.</p>
         </div>
       `;
@@ -1004,11 +1038,11 @@
 
     if (!notes.length) {
       return `
-        <div class="panel" style="grid-column: 1 / -1; padding: 48px 24px; text-align: center; color: #8e87a2;">
+        <div class="panel" style="grid-column: 1 / -1; padding: 48px 24px; text-align: center; color: var(--oc-muted);">
           <div style="display: inline-flex; align-items: center; justify-content: center; width: 48px; height: 48px; border-radius: 50%; background: rgba(255, 107, 107, 0.1); color: #ff8b7b; margin-bottom: 12px;">
             ${getIcon("search", 24)}
           </div>
-          <h3 style="color: #f4f1ff; font-size: 14px; margin-bottom: 6px;">No Matching Resources</h3>
+          <h3 style="color: var(--oc-text); font-size: 14px; margin-bottom: 6px;">No Matching Resources</h3>
           <p style="font-size: 11px; max-width: 420px; margin: 0 auto;">No documents match "${state.notesSearch || state.notesSubjectFilter}". Try adjusting your search query or subject filter.</p>
           <div style="margin-top: 14px;">
             <button type="button" class="secondary-btn" id="btn-reset-notes-filter">Reset Filters</button>
@@ -1147,6 +1181,8 @@
     const root = document.getElementById("app");
     if (!root) return;
 
+    applyTheme();
+
     if (!state.token || !state.user) {
       root.innerHTML = renderLogin();
       bindLoginEvents();
@@ -1164,7 +1200,7 @@
       <div class="login-screen">
         <div class="login-card">
           <div class="login-brand">
-            <div class="brand-mark" aria-hidden="true"><span></span></div>
+            ${renderOpenclassLogo(36)}
             <div>
               <div class="login-title">Openclass</div>
               <div style="font-size: 8px; font-family: var(--app-font-mono); color: #a78bfa; letter-spacing: 0.12em;">IMDR ACADEMIC CLOUD</div>
@@ -1319,11 +1355,7 @@
     const user = state.user || {};
     const userRole = (user.role || "STUDENT").toUpperCase();
     const isActualFaculty = userRole === "FACULTY";
-
-    // Strictly enforce student role if logged-in account is a student
-    if (!isActualFaculty) {
-      state.role = "student";
-    }
+    state.role = isActualFaculty ? "faculty" : "student";
 
     const isFaculty = state.role === "faculty";
     const initials = (user.name || "User").split(" ").map((n) => n[0]).join("").slice(0, 2).toUpperCase();
@@ -1358,12 +1390,6 @@
       <div class="shell">
         <!-- Sidebar -->
         <aside class="sidebar">
-          <div class="brand">
-            <div class="brand-mark" aria-hidden="true"><span></span></div>
-            <span class="brand-name">Openclass</span>
-            <span class="brand-beta">BETA</span>
-          </div>
-
           <div class="nav-label">Workspace</div>
           <nav class="nav-list" aria-label="workspace navigation">
             ${navItems
@@ -1400,7 +1426,7 @@
                 <div class="profile-role">${isActualFaculty ? "Course Coordinator" : `Student · ${user.batch_id || "CS-2A"}`}</div>
               </div>
             </div>
-            <button class="sidebar-signout-btn" id="btn-sidebar-signout" title="Sign out of OpenClass">
+            <button class="sidebar-signout-btn" id="btn-sidebar-signout" title="Sign out of Openclass">
               ${getIcon("logout", 14)}
               <span>Sign Out</span>
             </button>
@@ -1410,31 +1436,13 @@
         <!-- Main Body -->
         <main class="main">
           <!-- Topbar -->
-          <header class="topbar">
-            <div style="display: flex; align-items: center; gap: 12px;">
-              <div class="breadcrumb">
-                <span>Workspace</span>
-                <span style="opacity: 0.4;">/</span>
-                <strong>${state.currentTab === "knowledge-hub" || state.currentTab === "Knowledge Hub" ? "Knowledge Hub" : state.currentTab}</strong>
-              </div>
+          <header class="topbar reducto-topbar">
+            <div class="reducto-brand">
+              ${renderOpenclassLogo(40)}
+              <span class="reducto-brand-name">Openclass</span>
             </div>
 
             <div class="top-actions">
-              ${isActualFaculty ? `
-                <!-- Role Switcher (Visible ONLY for Faculty accounts) -->
-                <div class="role-switch" aria-label="Choose portal view">
-                  <button class="${state.role === "faculty" ? "active" : ""}" id="switch-faculty">Faculty portal</button>
-                  <button class="${state.role === "student" ? "active" : ""}" id="switch-student">Student view</button>
-                </div>
-              ` : `
-                <!-- Student Workspace Indicator: Hardcoded portal switcher completely removed -->
-                <div class="student-badge-indicator">
-                  <span class="live-dot" style="background: #61d7da;"></span>
-                  <span>Student Workspace · ${user.batch_id || "CS-2A"}</span>
-                </div>
-              `}
-
-              <!-- Search -->
               <div class="command-search">
                 ${getIcon("search", 13)}
                 <input
@@ -1442,35 +1450,22 @@
                   id="knowledge-search"
                   placeholder="${isFaculty ? "Search classes & rosters" : "Search your knowledge"}"
                   value="${state.filterSearch}"
-                  style="background: transparent; border: 0; color: #fff; font-size: 11px; outline: none; width: 140px;"
+                  style="background: transparent; border: 0; color: inherit; font-size: 12px; outline: none; width: 180px;"
                 />
               </div>
 
-              <!-- Notification Bell -->
-              <button class="icon-btn" id="btn-notifications" aria-label="Notifications">
-                ${getIcon("bell", 15)}
+              <button type="button" class="theme-toggle-btn" id="btn-theme-toggle" title="Toggle theme" aria-label="Toggle theme">
+                ${state.theme === "dark" ? getIcon("sun", 15) : getIcon("moon", 15)}
               </button>
-
-              ${!isFaculty ? renderOverallAttendancePill() : ""}
 
               <div class="avatar" title="${user.name} (${user.role})">${initials}</div>
 
-              <!-- Clean Topbar Sign Out Button -->
-              <button class="topbar-signout-btn" id="btn-topbar-signout" title="Sign out of OpenClass">
+              <button class="topbar-signout-btn" id="btn-topbar-signout" title="Sign out of Openclass">
                 ${getIcon("logout", 13)}
                 <span>Sign Out</span>
               </button>
             </div>
           </header>
-
-          <!-- Notification Popover -->
-          ${state.notificationOpen ? `
-            <div class="notification-pop">
-              <strong>Workspace Pulse</strong>
-              <p>Professor Iyer scheduled an extra review lecture with Google Meet host controls active.</p>
-              <p style="margin-top: 6px; font-size: 9px; color: #8e87a2;">All reminders synced with classroomflow database.</p>
-            </div>
-          ` : ""}
 
           <!-- Dynamic Content -->
           <div class="content">
@@ -1496,10 +1491,7 @@
   function renderTabContent() {
     const userRole = (state.user && state.user.role ? state.user.role : "STUDENT").toUpperCase();
     const isActualFaculty = userRole === "FACULTY";
-
-    if (!isActualFaculty) {
-      state.role = "student";
-    }
+    state.role = isActualFaculty ? "faculty" : "student";
 
     switch (state.currentTab) {
       case "Dashboard":
@@ -1605,7 +1597,7 @@
                   </div>
                   <span class="status-pill">${a.submission_count || 0} / ${a.total_students || 42}</span>
                 </div>
-              `).join("") : `<p style="font-size: 11px; color: #8e87a2;">No assignment portals created yet.</p>`}
+              `).join("") : `<p style="font-size: 11px; color: var(--oc-muted);">No assignment portals created yet.</p>`}
 
               <div class="control-actions">
                 <button class="quick-action compact-action" id="btn-quick-new-assignment">
@@ -1688,7 +1680,7 @@
               <label class="field-label" for="notes-file">File attachment</label>
               <input id="notes-file" name="file" class="field-input" type="file" required />
             </div>
-            <div style="background: rgba(167, 139, 250, 0.1); border: 1px solid rgba(167, 139, 250, 0.2); border-radius: 8px; padding: 10px 12px; font-size: 10px; color: #cfc2ff; display: flex; align-items: center; gap: 8px;">
+            <div style="background: rgba(167, 139, 250, 0.1); border: 1px solid rgba(167, 139, 250, 0.2); border-radius: 8px; padding: 10px 12px; font-size: 10px; color: var(--oc-muted); display: flex; align-items: center; gap: 8px;">
               ${getIcon("shield", 14)}
               <span>Students enrolled in this subject across batches will receive an email when notes are posted.</span>
             </div>
@@ -1709,7 +1701,7 @@
     if (n >= 75) {
       return { fill: "#10B981", track: "rgba(16,185,129,0.18)", text: "#10B981", label: "Eligible" };
     }
-    if (n > 50) {
+    if (n >= 50) {
       return { fill: "#F59E0B", track: "rgba(245,158,11,0.18)", text: "#F59E0B", label: "Warning" };
     }
     return { fill: "#EF4444", track: "rgba(239,68,68,0.18)", text: "#EF4444", label: "Shortage" };
@@ -1729,16 +1721,16 @@
   function renderFacultyClassesConductedPill() {
     const { conducted, avg } = facultyAttendanceTotals();
     const colors = avg == null
-      ? { fill: "#a78bfa", track: "rgba(167,139,250,0.14)", text: "#cfc2ff" }
+      ? { fill: "#7C3AED", track: "rgba(124,58,237,0.12)", text: "var(--oc-text)" }
       : attendanceBarColors(avg);
     return `
       <div id="faculty-classes-conducted-pill" style="display: inline-flex; align-items: center; gap: 8px; padding: 7px 12px 7px 8px; border-radius: 999px; background: ${colors.track}; border: 1px solid ${colors.fill}55; box-shadow: 0 0 0 3px ${colors.track};">
         <span style="width: 22px; height: 22px; border-radius: 50%; background: ${colors.fill}22; color: ${colors.text}; display: inline-flex; align-items: center; justify-content: center;">
           ${getIcon("calendar", 12)}
         </span>
-        <span style="font-size: 11px; font-weight: 650; color: #f4f1ff; letter-spacing: 0.01em; white-space: nowrap;">
+        <span style="font-size: 11px; font-weight: 650; color: var(--oc-text); letter-spacing: 0.01em; white-space: nowrap;">
           Total Classes Conducted: <strong style="color: ${colors.text};">${conducted}</strong>
-          ${avg != null ? `<span style="color: #8e87a2; font-weight: 600;"> · Avg ${avg}%</span>` : ""}
+          ${avg != null ? `<span style="color: var(--oc-muted); font-weight: 600;"> · Avg ${avg}%</span>` : ""}
         </span>
       </div>
     `;
@@ -1748,19 +1740,19 @@
     const data = state.studentAttendance;
     const pct = data && data.overall_percentage != null ? Number(data.overall_percentage) : null;
     const colors = pct == null
-      ? { fill: "#a78bfa", track: "rgba(167,139,250,0.14)", text: "#cfc2ff", label: "Loading" }
+      ? { fill: "#7C3AED", track: "rgba(124,58,237,0.12)", text: "#7C3AED", label: "Loading" }
       : attendanceBarColors(pct);
     const label = colors.label;
     const pctText = pct == null ? "—" : `${pct}%`;
     return `
-      <div id="overall-attendance-pill" style="display: inline-flex; align-items: center; gap: 8px; padding: 7px 12px 7px 8px; border-radius: 999px; background: ${colors.track}; border: 1px solid ${colors.fill}55; box-shadow: 0 0 0 3px ${colors.track};">
-        <span style="width: 22px; height: 22px; border-radius: 50%; background: ${colors.fill}22; color: ${colors.text}; display: inline-flex; align-items: center; justify-content: center;">
-          ${getIcon("attendance", 12)}
-        </span>
-        <span style="font-size: 11px; font-weight: 650; color: #f4f1ff; letter-spacing: 0.01em; white-space: nowrap;">
-          Overall Attendance: <strong style="color: ${colors.text};">${pctText}</strong>
-          <span style="color: #8e87a2; font-weight: 600;"> · ${label}</span>
-        </span>
+      <div class="attendance-status-strip" id="overall-attendance-strip">
+        ${getIcon("attendance", 13)}
+        <span>Overall attendance</span>
+        <strong style="color: ${colors.text};">${pctText}</strong>
+        <span style="color: ${colors.text}; font-weight: 700; font-size: 11px;">${label}</span>
+        <div class="mini-track" style="background: ${colors.track};">
+          <div style="height: 100%; width: ${pct == null ? 0 : Math.min(Math.max(pct, 0), 100)}%; background: ${colors.fill};"></div>
+        </div>
       </div>
     `;
   }
@@ -1778,13 +1770,13 @@
           <span class="panel-meta">${
             overall != null
               ? `Overall ${overall}% · ${data.total_attended || 0}/${data.total_classes || 0} classes`
-              : "Live from OpenClass"
+              : "Live from Openclass"
           }</span>
         </div>
         ${overall != null ? `
           <div style="padding: 0 20px 12px;">
             <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px;">
-              <span style="font-size: 11px; color: #8e87a2;">Overall eligibility</span>
+              <span style="font-size: 11px; color: var(--oc-muted, #64748b);">Overall eligibility</span>
               <span style="font-size: 12px; font-weight: 800; color: ${overallColors.text};">${overall}%</span>
             </div>
             <div style="height: 8px; border-radius: 999px; background: ${overallColors.track}; overflow: hidden;">
@@ -1793,21 +1785,21 @@
           </div>
         ` : ""}
         <div style="padding: 4px 20px 18px; display: grid; gap: 12px;">
-          ${!data ? `<p style="font-size: 11px; color: #8e87a2;">Loading live attendance…</p>` : ""}
-          ${data && !subjects.length ? `<p style="font-size: 11px; color: #8e87a2;">No subject attendance records yet. Join a Google Meet session to check in.</p>` : ""}
+          ${!data ? `<p style="font-size: 11px; color: var(--oc-muted);">Loading live attendance…</p>` : ""}
+          ${data && !subjects.length ? `<p style="font-size: 11px; color: var(--oc-muted);">No subject attendance records yet. Join a Google Meet session to check in.</p>` : ""}
           ${subjects.map((item) => {
             const pct = Number(item.percentage) || 0;
             const colors = attendanceBarColors(pct);
             const attended = item.attended != null ? item.attended : 0;
             const total = item.total != null ? item.total : 0;
             return `
-              <div style="padding: 12px 14px; border-radius: 12px; background: rgba(255,255,255,0.02); border: 1px solid rgba(147,133,204,0.14);">
+              <div class="attendance-subject-row">
                 <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px;">
-                  <strong style="font-size: 13px; color: #f4f1ff;">${item.subject || "Course"}</strong>
+                  <strong style="font-size: 13px;">${item.subject || "Course"}</strong>
                   <span style="font-size: 9px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: ${colors.text}; background: ${colors.track}; border: 1px solid ${colors.fill}55; border-radius: 999px; padding: 3px 8px;">${colors.label}</span>
                 </div>
                 <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px;">
-                  <span style="font-size: 11px; color: #8e87a2;">${attended}/${total} classes</span>
+                  <span style="font-size: 11px; color: var(--oc-muted);">${attended}/${total} classes</span>
                   <span style="font-size: 16px; font-weight: 800; color: ${colors.text};">${pct}%</span>
                 </div>
                 <div style="height: 9px; border-radius: 999px; background: ${colors.track}; overflow: hidden;">
@@ -1829,9 +1821,8 @@
           <div>
             <div class="eyebrow">Student Portal · Attendance</div>
             <h1 class="hero-title">My Attendance.</h1>
-            <p class="hero-copy">Live subject-wise attendance for batch ${user.batch_id || "CS-2A"}. Green is 75% or higher, yellow is above 50%, red is 50% or below.</p>
+            <p class="hero-copy">Live subject-wise attendance for batch ${user.batch_id || "CS-2A"}. Green is 75% or higher, yellow is 50–74%, red is below 50%.</p>
           </div>
-          ${renderOverallAttendancePill()}
         </div>
         ${renderStudentAttendanceCard()}
       </div>
@@ -1861,21 +1852,21 @@
 
         <div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-bottom: 18px;">
           <div class="panel" style="padding: 16px 18px;">
-            <div style="font-size: 10px; color: #8e87a2; text-transform: uppercase; letter-spacing: 0.08em;">Total Classes Conducted</div>
-            <div style="font-size: 28px; font-weight: 800; color: #f4f1ff; margin-top: 6px;">${conducted}</div>
-            <div style="font-size: 11px; color: #8e87a2; margin-top: 4px;">Across ${subjectCount || subjects.length} subject${(subjectCount || subjects.length) === 1 ? "" : "s"}</div>
+            <div style="font-size: 10px; color: var(--oc-muted); text-transform: uppercase; letter-spacing: 0.08em;">Total Classes Conducted</div>
+            <div style="font-size: 28px; font-weight: 800; color: var(--oc-text); margin-top: 6px;">${conducted}</div>
+            <div style="font-size: 11px; color: var(--oc-muted); margin-top: 4px;">Across ${subjectCount || subjects.length} subject${(subjectCount || subjects.length) === 1 ? "" : "s"}</div>
           </div>
           <div class="panel" style="padding: 16px 18px;">
-            <div style="font-size: 10px; color: #8e87a2; text-transform: uppercase; letter-spacing: 0.08em;">Overall Average Attendance</div>
+            <div style="font-size: 10px; color: var(--oc-muted); text-transform: uppercase; letter-spacing: 0.08em;">Overall Average Attendance</div>
             <div style="font-size: 28px; font-weight: 800; color: ${overallColors.text}; margin-top: 6px;">${avg != null ? avg + "%" : "—"}</div>
             <div style="height: 8px; border-radius: 999px; background: ${overallColors.track}; overflow: hidden; margin-top: 10px;">
               <div style="height: 100%; width: ${Math.min(Math.max(avg || 0, 0), 100)}%; background: ${overallColors.fill}; border-radius: 999px;"></div>
             </div>
           </div>
           <div class="panel" style="padding: 16px 18px;">
-            <div style="font-size: 10px; color: #8e87a2; text-transform: uppercase; letter-spacing: 0.08em;">Reporting Standard</div>
-            <div style="font-size: 13px; font-weight: 700; color: #f4f1ff; margin-top: 8px;">≥75% Strong · &gt;50% Watch · ≤50% At Risk</div>
-            <div style="font-size: 11px; color: #8e87a2; margin-top: 6px;">Present + Late counted toward attendance.</div>
+            <div style="font-size: 10px; color: var(--oc-muted); text-transform: uppercase; letter-spacing: 0.08em;">Reporting Standard</div>
+            <div style="font-size: 13px; font-weight: 700; color: var(--oc-text); margin-top: 8px;">≥75% Strong · 50–74% Watch · &lt;50% At Risk</div>
+            <div style="font-size: 11px; color: var(--oc-muted); margin-top: 6px;">Present + Late counted toward attendance.</div>
           </div>
         </div>
 
@@ -1889,7 +1880,7 @@
           <div style="overflow-x: auto;">
             <table style="width: 100%; border-collapse: collapse; font-size: 12px;">
               <thead>
-                <tr style="text-align: left; color: #8e87a2; font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; border-bottom: 1px solid rgba(147,133,204,0.18);">
+                <tr style="text-align: left; color: var(--oc-muted); font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; border-bottom: 1px solid rgba(147,133,204,0.18);">
                   <th style="padding: 10px 20px; font-weight: 700;">Subject</th>
                   <th style="padding: 10px 16px; font-weight: 700;">Batches</th>
                   <th style="padding: 10px 16px; font-weight: 700; text-align: right;">Lectures conducted</th>
@@ -1897,17 +1888,17 @@
                 </tr>
               </thead>
               <tbody>
-                ${!data ? `<tr><td colspan="4" style="padding: 24px 20px; color: #8e87a2;">Loading analytics…</td></tr>` : ""}
-                ${data && !subjects.length ? `<tr><td colspan="4" style="padding: 24px 20px; color: #8e87a2;">No class sessions found. Ingest a timetable or schedule lectures to populate this report.</td></tr>` : ""}
+                ${!data ? `<tr><td colspan="4" style="padding: 24px 20px; color: var(--oc-muted);">Loading analytics…</td></tr>` : ""}
+                ${data && !subjects.length ? `<tr><td colspan="4" style="padding: 24px 20px; color: var(--oc-muted);">No class sessions found. Ingest a timetable or schedule lectures to populate this report.</td></tr>` : ""}
                 ${subjects.map((row) => {
                   const pct = Number(row.average_attendance_percentage) || 0;
                   const colors = attendanceBarColors(pct);
                   const batches = (row.batches || []).join(", ") || "—";
                   return `
                     <tr style="border-bottom: 1px solid rgba(147,133,204,0.1);">
-                      <td style="padding: 14px 20px; color: #f4f1ff; font-weight: 700;">${row.subject}</td>
-                      <td style="padding: 14px 16px; color: #b3aec5;">${batches}</td>
-                      <td style="padding: 14px 16px; text-align: right; color: #f4f1ff; font-weight: 800; font-variant-numeric: tabular-nums;">${row.total_classes_conducted}</td>
+                      <td style="padding: 14px 20px; color: var(--oc-text); font-weight: 700;">${row.subject}</td>
+                      <td style="padding: 14px 16px; color: var(--oc-muted);">${batches}</td>
+                      <td style="padding: 14px 16px; text-align: right; color: var(--oc-text); font-weight: 800; font-variant-numeric: tabular-nums;">${row.total_classes_conducted}</td>
                       <td style="padding: 14px 20px;">
                         <div style="display: flex; align-items: center; gap: 10px;">
                           <div style="flex: 1; height: 8px; border-radius: 999px; background: ${colors.track}; overflow: hidden;">
@@ -1950,13 +1941,12 @@
             <h1 class="hero-title">Good morning, <span class="accent">${user.name || "Student"}.</span></h1>
             <p class="hero-copy">Your personalized learning space, arranged around lectures, submissions, and class notes.</p>
           </div>
-          <div style="display: flex; flex-direction: column; align-items: flex-end; gap: 8px;">
-            ${renderOverallAttendancePill()}
-            <div class="date-note">
-              Synced via <b>Microsoft 365 OIDC</b>
-            </div>
+          <div class="date-note">
+            Synced via <b>Microsoft 365 OIDC</b>
           </div>
         </div>
+
+        ${renderOverallAttendancePill()}
 
         <div class="dashboard-grid">
           <!-- Up Next Class Card (with Strict Host Google Meet Integration) -->
@@ -2050,11 +2040,11 @@
                     </div>
                     <div class="management-copy" style="min-width: 0; flex: 1;">
                       <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
-                        <strong style="color: #f4f1ff; font-size: 12px; font-weight: 700;">${a.title}</strong>
+                        <strong style="color: var(--oc-text); font-size: 12px; font-weight: 700;">${a.title}</strong>
                         <span class="status-pill" style="font-size: 8px;">${a.subject || "Coursework"}</span>
                         ${isUrgent ? `<span class="deadline-badge deadline-urgent" style="font-size: 8px;">${getIcon("clock", 10)} Due in ${Math.round(a.hours_remaining)}h</span>` : ""}
                       </div>
-                      <span style="font-size: 10px; color: #8e87a2; margin-top: 3px; display: block;">
+                      <span style="font-size: 10px; color: var(--oc-muted); margin-top: 3px; display: block;">
                         <strong>Deadline:</strong> ${formatDeadline(a.deadline)} · Faculty: ${a.faculty_name || "Course Lead"} · Batch: ${a.batch_id || user.batch_id || "CS-2A"}
                       </span>
                     </div>
@@ -2067,12 +2057,12 @@
                 </div>
               `;
     }).join("") : `
-              <div style="padding: 28px 16px; text-align: center; color: #8e87a2;">
+              <div style="padding: 28px 16px; text-align: center; color: var(--oc-muted);">
                 <div style="display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px; border-radius: 50%; background: rgba(72, 199, 142, 0.12); color: #48c78e; margin-bottom: 8px;">
                   ${getIcon("check", 18)}
                 </div>
-                <div style="color: #f4f1ff; font-weight: 700; font-size: 12px;">All Caught Up!</div>
-                <p style="font-size: 11px; margin-top: 4px; color: #8e87a2;">
+                <div style="color: var(--oc-text); font-weight: 700; font-size: 12px;">All Caught Up!</div>
+                <p style="font-size: 11px; margin-top: 4px; color: var(--oc-muted);">
                   ${allAssignments.length > 0 ? "You have submitted all active assignments for your batch." : `No active assignments posted for batch ${user.batch_id || "CS-2A"} right now.`}
                 </p>
               </div>
@@ -2103,7 +2093,7 @@
 
         <section class="panel hub-filter-panel" style="margin-bottom: 20px; padding: 18px 20px;">
           <div class="notes-filter-bar" style="margin: 0; padding: 0; background: transparent; border: 0;">
-            <div class="notes-search-wrap" style="background: rgba(18, 17, 30, 0.7); border: 1px solid rgba(147, 133, 204, 0.2);">
+            <div class="notes-search-wrap">
               ${getIcon("search", 15)}
               <input
                 id="notes-search-input"
@@ -2113,7 +2103,7 @@
                 value="${state.notesSearch || ""}"
               />
               ${state.notesSearch ? `
-                <button type="button" id="btn-clear-notes-search" style="background: transparent; border: 0; color: #8e87a2; cursor: pointer; padding: 2px;">
+                <button type="button" id="btn-clear-notes-search" style="background: transparent; border: 0; color: var(--oc-muted); cursor: pointer; padding: 2px;">
                   ${getIcon("close", 12)}
                 </button>
               ` : ""}
@@ -2127,7 +2117,7 @@
     }).join("")}
               </div>
 
-              <div class="hub-results-count" style="font-size: 11px; color: #8e87a2; font-family: var(--app-font-mono); white-space: nowrap;">
+              <div class="hub-results-count" style="font-size: 11px; color: var(--oc-muted); font-family: var(--app-font-mono); white-space: nowrap;">
                 Showing <strong>${filtered.length}</strong> of <strong>${totalCount}</strong> resources
               </div>
             </div>
@@ -2198,7 +2188,7 @@
                   </div>
                 </div>
 
-                <p style="font-size: 11px; color: #b3aec5; margin: 10px 0; line-height: 1.5;">
+                <p style="font-size: 11px; color: var(--oc-muted); margin: 10px 0; line-height: 1.5;">
                   ${a.description || "Review problem description and submit your source code or report."}
                 </p>
 
@@ -2236,9 +2226,9 @@
               </div>
             `;
         }).join("") : `
-            <div class="panel" style="padding: 32px; text-align: center; color: #8e87a2;">
+            <div class="panel" style="padding: 32px; text-align: center; color: var(--oc-muted);">
               ${getIcon("assignment", 32)}
-              <h3 style="color: #f4f1ff; margin: 10px 0 6px;">No assignments found</h3>
+              <h3 style="color: var(--oc-text); margin: 10px 0 6px;">No assignments found</h3>
               <p style="font-size: 11px;">There are currently no active assignments matching your batch.</p>
             </div>
           `}
@@ -2278,11 +2268,11 @@
                 <div style="display: flex; align-items: center; gap: 16px;">
                   <div style="background: rgba(167, 139, 250, 0.15); border: 1px solid rgba(167, 139, 250, 0.3); border-radius: 8px; padding: 8px 12px; text-align: center;">
                     <strong style="color: #a78bfa; font-size: 13px; display: block;">${c.start_time}</strong>
-                    <span style="font-size: 9px; color: #8e87a2;">${c.weekday || "Thursday"}</span>
+                    <span style="font-size: 9px; color: var(--oc-muted);">${c.weekday || "Thursday"}</span>
                   </div>
                   <div>
-                    <strong style="font-size: 13px; color: #f4f1ff; display: block;">${c.subject}</strong>
-                    <span style="font-size: 10px; color: #8e87a2;">Faculty: ${c.faculty_name || "Faculty Lead"} · Batch: ${c.batch || "CS-2A"}</span>
+                    <strong style="font-size: 13px; color: var(--oc-text); display: block;">${c.subject}</strong>
+                    <span style="font-size: 10px; color: var(--oc-muted);">Faculty: ${c.faculty_name || "Faculty Lead"} · Batch: ${c.batch || "CS-2A"}</span>
                   </div>
                 </div>
 
@@ -2301,11 +2291,11 @@
               ${isFaculty ? `
               <!-- Inline attendance summary bar for faculty -->
               <div style="border-top: 1px solid rgba(147,133,204,0.12); padding: 10px 20px; display: flex; align-items: center; gap: 16px; background: rgba(167,139,250,0.04);">
-                <span style="font-size: 10px; color: #8e87a2; display: flex; align-items: center; gap: 5px;">
+                <span style="font-size: 10px; color: var(--oc-muted); display: flex; align-items: center; gap: 5px;">
                   ${getIcon("people", 11)}
                   <span>Batch ${c.batch || "CS-2A"}</span>
                 </span>
-                <span style="font-size: 10px; color: #8e87a2;">·</span>
+                <span style="font-size: 10px; color: var(--oc-muted);">·</span>
                 <span style="font-size: 10px; color: #61d7da; display: flex; align-items: center; gap: 5px;">
                   ${getIcon("attendance", 11)}
                   Click <strong style="color: #a78bfa; margin: 0 2px;">Attendance & Logs</strong> to view or finalize the smart roster
@@ -2346,14 +2336,14 @@
 
         <div class="people-grid">
           ${people.map((p) => {
-      const inits = (p.full_name || "Faculty").split(" ").map((n) => n[0]).join("");
+      const inits = (p.full_name || "Faculty").split(" ").map((n) => n[0]).join("").slice(0, 2).toUpperCase();
       return `
               <article class="panel person-card">
                 <div class="person-avatar purple">${inits}</div>
                 <div class="person-copy">
                   <strong>${p.full_name}</strong>
                   <span>Course Faculty</span>
-                  <small>${p.email}</small>
+                  <small>${p.email}${p.phone ? " · " + p.phone : ""}</small>
                 </div>
                 <div class="person-actions">
                   <a href="mailto:${p.email}" class="secondary-btn" style="text-decoration: none;">Contact</a>
@@ -2442,8 +2432,8 @@
                   <div style="display: flex; align-items: center; gap: 12px; min-width: 0;">
                     <div class="avatar" style="width: 28px; height: 28px; font-size: 10px;">${initials}</div>
                     <div style="min-width: 0;">
-                      <strong style="color: #f4f1ff; font-size: 12px; display: block;">${t.title}</strong>
-                      <span style="font-size: 10px; color: #8e87a2;">${author} · ${meta.detail}</span>
+                      <strong style="color: var(--oc-text); font-size: 12px; display: block;">${t.title}</strong>
+                      <span style="font-size: 10px; color: var(--oc-muted);">${author} · ${meta.detail}</span>
                     </div>
                   </div>
                   <div style="display: flex; align-items: center; gap: 8px; flex-shrink: 0;">
@@ -2452,7 +2442,7 @@
                   </div>
                 </button>
               `;
-            }).join("") : `<p style="font-size: 12px; color: #8e87a2;">No threads in this scope yet. Start one to open the conversation.</p>`}
+            }).join("") : `<p style="font-size: 12px; color: var(--oc-muted);">No threads in this scope yet. Start one to open the conversation.</p>`}
           </div>
 
           ${active ? `
@@ -2464,17 +2454,17 @@
                 </div>
                 <button type="button" class="muted-btn" id="btn-close-active-thread">Close</button>
               </div>
-              ${active.body ? `<p style="padding: 0 16px 12px; font-size: 12px; color: #cfc2ff; line-height: 1.45;">${active.body}</p>` : ""}
+              ${active.body ? `<p style="padding: 0 16px 12px; font-size: 12px; color: var(--oc-muted); line-height: 1.45;">${active.body}</p>` : ""}
               <div style="padding: 0 16px 12px; display: grid; gap: 8px; max-height: 360px; overflow-y: auto;">
                 ${(active.messages || []).length ? (active.messages || []).map((m) => `
                   <div style="padding: 10px 12px; border-radius: 10px; background: rgba(255,255,255,0.03); border: 1px solid rgba(147,133,204,0.12);">
                     <div style="display: flex; justify-content: space-between; gap: 8px;">
-                      <strong style="font-size: 11px; color: #f4f1ff;">${m.author_name || "Member"}</strong>
-                      <span style="font-size: 9px; color: #8e87a2;">${m.author_role || ""} · ${m.created_at ? formatDeadline(m.created_at) : ""}</span>
+                      <strong style="font-size: 11px; color: var(--oc-text);">${m.author_name || "Member"}</strong>
+                      <span style="font-size: 9px; color: var(--oc-muted);">${m.author_role || ""} · ${m.created_at ? formatDeadline(m.created_at) : ""}</span>
                     </div>
-                    <p style="margin: 6px 0 0; font-size: 12px; color: #d8d3ea; line-height: 1.45;">${m.body}</p>
+                    <p style="margin: 6px 0 0; font-size: 12px; color: var(--oc-text); line-height: 1.45;">${m.body}</p>
                   </div>
-                `).join("") : `<p style="font-size: 11px; color: #8e87a2;">No replies yet. Be the first to continue the thread.</p>`}
+                `).join("") : `<p style="font-size: 11px; color: var(--oc-muted);">No replies yet. Be the first to continue the thread.</p>`}
               </div>
               <form id="form-thread-reply" style="padding: 12px 16px 16px; border-top: 1px solid rgba(147,133,204,0.12); display: grid; gap: 8px;">
                 <textarea id="thread-reply-input" class="field-input" style="height: 64px; resize: none;" placeholder="${isFaculty && String(active.scope_type).toLowerCase() === "batch" ? "Post a batch announcement (students are emailed)…" : "Write a reply…"}" required></textarea>
@@ -2555,7 +2545,7 @@
             <label class="field-label" for="assign-desc">Instructions & Guidelines</label>
             <textarea id="assign-desc" class="field-input" style="height: 60px; resize: none;" placeholder="Instructions for the students..."></textarea>
 
-            <div style="background: rgba(167, 139, 250, 0.1); border: 1px solid rgba(167, 139, 250, 0.2); border-radius: 8px; padding: 10px 12px; margin-bottom: 14px; font-size: 10px; color: #cfc2ff; display: flex; align-items: center; gap: 8px;">
+            <div style="background: rgba(167, 139, 250, 0.1); border: 1px solid rgba(167, 139, 250, 0.2); border-radius: 8px; padding: 10px 12px; margin-bottom: 14px; font-size: 10px; color: var(--oc-muted); display: flex; align-items: center; gap: 8px;">
               ${getIcon("shield", 14)}
               <span>Automated background task will send formatted assignment notification emails to the batch upon creation.</span>
             </div>
@@ -2642,7 +2632,7 @@
           <form id="form-submit-assignment">
             <label class="upload-zone" id="upload-zone-drop">
               ${getIcon("upload", 28)}
-              <strong style="color: #f4f1ff;">Choose submission file</strong>
+              <strong style="color: var(--oc-text);">Choose submission file</strong>
               <span>PDF or Image (PNG, JPG) up to 25 MB</span>
               <input type="file" id="submit-file-input" accept=".pdf,.png,.jpg,.jpeg,.gif" style="display: none;" />
             </label>
@@ -2679,12 +2669,12 @@
             ${list.length > 0 ? list.map((s) => `
               <div style="background: rgba(255,255,255,0.02); border: 1px solid rgba(138,127,195,0.15); border-radius: 8px; padding: 12px; margin-bottom: 8px; display: flex; align-items: center; justify-content: space-between;">
                 <div>
-                  <strong style="color: #f4f1ff; font-size: 12px;">${s.student_name || "Student " + s.student_id}</strong>
-                  <div style="font-size: 10px; color: #8e87a2;">${s.original_filename || "submission.pdf"} · ${formatDeadline(s.submitted_at)}</div>
+                  <strong style="color: var(--oc-text); font-size: 12px;">${s.student_name || "Student " + s.student_id}</strong>
+                  <div style="font-size: 10px; color: var(--oc-muted);">${s.original_filename || "submission.pdf"} · ${formatDeadline(s.submitted_at)}</div>
                 </div>
                 <span class="status-pill" style="color: #48c78e; border-color: #48c78e44;">Submitted</span>
               </div>
-            `).join("") : `<p style="font-size: 11px; color: #8e87a2; text-align: center; padding: 20px;">No student submissions recorded yet.</p>`}
+            `).join("") : `<p style="font-size: 11px; color: var(--oc-muted); text-align: center; padding: 20px;">No student submissions recorded yet.</p>`}
           </div>
 
           <div class="modal-actions">
@@ -2741,11 +2731,11 @@
             </div>
 
             <div class="delivery-options" style="padding: 10px; margin-bottom: 14px;">
-              <label style="display: flex; align-items: center; gap: 8px; font-size: 10px; color: #c5c0d6; margin-bottom: 6px;">
+              <label style="display: flex; align-items: center; gap: 8px; font-size: 10px; color: var(--oc-muted); margin-bottom: 6px;">
                 <input type="checkbox" checked disabled />
                 Generate Google Meet space (Strict Faculty Host Controls)
               </label>
-              <label style="display: flex; align-items: center; gap: 8px; font-size: 10px; color: #c5c0d6;">
+              <label style="display: flex; align-items: center; gap: 8px; font-size: 10px; color: var(--oc-muted);">
                 <input type="checkbox" id="sudden-send-email" checked />
                 Auto-dispatch alert emails to enrolled batch students
               </label>
@@ -2778,7 +2768,7 @@
           <form id="form-upload-timetable">
             <label class="upload-zone" id="upload-zone-tt">
               ${getIcon("upload", 28)}
-              <strong style="color: #f4f1ff;">Drop university roster here</strong>
+              <strong style="color: var(--oc-text);">Drop university roster here</strong>
               <span>.XLSX or .XLSM up to 10 MB</span>
               <input type="file" id="tt-file-input" accept=".xlsx,.xlsm" style="display: none;" />
             </label>
@@ -2959,24 +2949,24 @@
           <div style="flex-shrink: 0; display: flex; gap: 12px; padding: 14px 20px; background: rgba(167,139,250,0.06); border-bottom: 1px solid rgba(147,133,204,0.14);">
             <div style="flex: 1; text-align: center;">
               <div style="font-size: 22px; font-weight: 800; color: #48c78e;">${present_count}</div>
-              <div style="font-size: 9px; color: #8e87a2; text-transform: uppercase; letter-spacing: 0.08em;">Present</div>
+              <div style="font-size: 9px; color: var(--oc-muted); text-transform: uppercase; letter-spacing: 0.08em;">Present</div>
             </div>
             <div style="flex: 1; text-align: center;">
               <div style="font-size: 22px; font-weight: 800; color: #ff8b7b;">${absent_count}</div>
-              <div style="font-size: 9px; color: #8e87a2; text-transform: uppercase; letter-spacing: 0.08em;">Absent</div>
+              <div style="font-size: 9px; color: var(--oc-muted); text-transform: uppercase; letter-spacing: 0.08em;">Absent</div>
             </div>
             <div style="flex: 1; text-align: center;">
               <div style="font-size: 22px; font-weight: 800; color: #a78bfa;">${pct}%</div>
-              <div style="font-size: 9px; color: #8e87a2; text-transform: uppercase; letter-spacing: 0.08em;">Attendance</div>
+              <div style="font-size: 9px; color: var(--oc-muted); text-transform: uppercase; letter-spacing: 0.08em;">Attendance</div>
             </div>
             <div style="flex: 1; text-align: center;">
-              <div style="font-size: 22px; font-weight: 800; color: #f4f1ff;">${total_enrolled}</div>
-              <div style="font-size: 9px; color: #8e87a2; text-transform: uppercase; letter-spacing: 0.08em;">Enrolled</div>
+              <div style="font-size: 22px; font-weight: 800; color: var(--oc-text);">${total_enrolled}</div>
+              <div style="font-size: 9px; color: var(--oc-muted); text-transform: uppercase; letter-spacing: 0.08em;">Enrolled</div>
             </div>
           </div>
 
           <!-- Instructions -->
-          <div style="flex-shrink: 0; padding: 10px 20px; background: rgba(167,139,250,0.04); border-bottom: 1px solid rgba(147,133,204,0.1); font-size: 10px; color: #9d94bf; display: flex; align-items: center; gap: 7px;">
+          <div style="flex-shrink: 0; padding: 10px 20px; background: rgba(167,139,250,0.04); border-bottom: 1px solid rgba(147,133,204,0.1); font-size: 10px; color: var(--oc-muted); display: flex; align-items: center; gap: 7px;">
             ${getIcon("sparkles", 12)}
             <span>Click any status badge to toggle: <strong style="color:#48c78e">Present</strong> → <strong style="color:#ffc107">Late</strong> → <strong style="color:#ff8b7b">Absent</strong>. Auto-populated from student check-ins.</span>
           </div>
@@ -2991,8 +2981,8 @@
                 <div class="attendance-row" data-idx="${idx}" data-student-id="${r.student_id}" data-student-name="${r.student_name || ""}" data-batch-id="${r.batch_id || ""}" data-status="${r.status}" style="display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-radius: 10px; background: rgba(255,255,255,0.02); border: 1px solid rgba(147,133,204,0.12); transition: border-color 0.15s;">
                   <div style="width: 32px; height: 32px; border-radius: 50%; background: rgba(167,139,250,0.18); color: #a78bfa; font-size: 11px; font-weight: 700; display: flex; align-items: center; justify-content: center; flex-shrink: 0;">${initials}</div>
                   <div style="flex: 1; min-width: 0;">
-                    <div style="font-size: 12px; font-weight: 700; color: #f4f1ff;">${r.student_name}</div>
-                    <div style="font-size: 10px; color: #8e87a2;">ID: ${r.student_id} · Batch: ${r.batch_id || batch}${ts ? " · Checked in: " + ts : ""}</div>
+                    <div style="font-size: 12px; font-weight: 700; color: var(--oc-text);">${r.student_name}</div>
+                    <div style="font-size: 10px; color: var(--oc-muted);">ID: ${r.student_id} · Batch: ${r.batch_id || batch}${ts ? " · Checked in: " + ts : ""}</div>
                   </div>
                   <button type="button" class="attendance-status-toggle" data-idx="${idx}" style="cursor: pointer; font-size: 10px; font-weight: 700; padding: 5px 12px; border-radius: 6px; border: 1px solid ${sc.border}; background: ${sc.bg}; color: ${sc.text}; font-family: inherit; transition: all 0.15s;">
                     ${r.status}
@@ -3035,26 +3025,6 @@
 
     const isActualFaculty = (state.user && state.user.role ? state.user.role : "STUDENT").toUpperCase() === "FACULTY";
 
-    // Role Switchers (Only available and bound for Faculty accounts)
-    const switchFac = document.getElementById("switch-faculty");
-    const switchStd = document.getElementById("switch-student");
-    if (switchFac && isActualFaculty) {
-      switchFac.addEventListener("click", () => {
-        state.role = "faculty";
-        state.currentTab = "Dashboard";
-        showToast("Switched to Faculty Portal view");
-        render();
-      });
-    }
-    if (switchStd && isActualFaculty) {
-      switchStd.addEventListener("click", () => {
-        state.role = "student";
-        state.currentTab = "Dashboard";
-        showToast("Switched to Student Portal preview");
-        render();
-      });
-    }
-
     // Sign Out Action Handlers
     const btnLogout = document.getElementById("btn-logout");
     if (btnLogout) {
@@ -3069,13 +3039,9 @@
       btnTopbarSignout.addEventListener("click", () => api.logout());
     }
 
-    // Notifications toggle
-    const btnNotif = document.getElementById("btn-notifications");
-    if (btnNotif) {
-      btnNotif.addEventListener("click", () => {
-        state.notificationOpen = !state.notificationOpen;
-        render();
-      });
+    const btnTheme = document.getElementById("btn-theme-toggle");
+    if (btnTheme) {
+      btnTheme.addEventListener("click", () => toggleTheme());
     }
 
     // Floating action button

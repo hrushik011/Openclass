@@ -111,7 +111,7 @@ class NotificationService:
         email_body = (
             f"A new assignment has been posted for batch {batch_id}.\n\n"
             f"Title: {title}\nSubject: {subject}\nFaculty: {faculty_name}\nDeadline: {deadline}\n\n"
-            f"{description}\n\nOpenClass Academic System"
+            f"{description}\n\nOpenclass Academic System"
         )
         sent = 0
         for r in recipients:
@@ -125,13 +125,13 @@ class NotificationService:
         if not faculty_email:
             return False
         title = thread.get("title", "Private message")
-        email_subject = f"OpenClass DM: {title}"
+        email_subject = f"Openclass DM: {title}"
         email_body = (
-            f"You have a private message on OpenClass.\n\n"
+            f"You have a private message on Openclass.\n\n"
             f"From: {sender_name}\n"
             f"Thread: {title}\n\n"
             f"{preview}\n\n"
-            f"Log in to OpenClass → Class Threads → Private Faculty DMs to reply.\n"
+            f"Log in to Openclass → Class Threads → Private Faculty DMs to reply.\n"
         )
         return cls.send_email(faculty_email, email_subject, email_body)
 
@@ -140,7 +140,7 @@ class NotificationService:
         title = thread.get("title", "Course announcement")
         batch_id = thread.get("batch_id") or ""
         subject = thread.get("subject") or "Course"
-        email_subject = f"OpenClass [{batch_id}] {subject}: {title}"
+        email_subject = f"Openclass [{batch_id}] {subject}: {title}"
         email_body = (
             f"A new announcement was posted in your course thread.\n\n"
             f"Batch: {batch_id}\n"
@@ -148,7 +148,7 @@ class NotificationService:
             f"From: {poster_name}\n"
             f"Thread: {title}\n\n"
             f"{preview}\n\n"
-            f"Open Class Threads in OpenClass to read and reply.\n"
+            f"Open Class Threads in Openclass to read and reply.\n"
         )
         sent = 0
         for r in recipients:

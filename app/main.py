@@ -71,7 +71,7 @@ ROOT = Path(__file__).resolve().parents[1]
 TIMEZONE = ZoneInfo("Asia/Kolkata")
 
 scheduler = BackgroundScheduler(timezone=TIMEZONE)
-app = FastAPI(title="OpenClass Platform", version="2.0.0")
+app = FastAPI(title="Openclass Platform", version="2.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -597,7 +597,7 @@ def create_sudden_class(payload: dict, background_tasks: BackgroundTasks):
             f"A replacement session for {payload.get('subject')} has been scheduled for {payload.get('class_date')} at {payload.get('start_time')}.\n\n"
             f"Join Google Meet (Strict Host Controls Active):\n{meeting_url}\n\n"
             f"Faculty Host: {faculty_name}\n"
-            f"OpenClass Academic System"
+            f"Openclass Academic System"
         )
         for r in recipients:
             if r.get("email"):
@@ -718,8 +718,8 @@ async def upload_lecture_notes(
             f"Title: {title}\n"
             f"File: {safe_name}\n"
             f"Faculty: {faculty_name or 'Course Faculty'}\n\n"
-            f"Please log into OpenClass to download the notes.\n\n"
-            f"OpenClass Academic System"
+            f"Please log into Openclass to download the notes.\n\n"
+            f"Openclass Academic System"
         )
         for student in recipients:
             email = student.get("email")
