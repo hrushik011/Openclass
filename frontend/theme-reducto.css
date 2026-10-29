@@ -776,3 +776,43 @@ html[data-theme="light"] .compact-action:hover {
   background: #ffffff !important;
   border-color: #e5e7eb !important;
 }
+
+.upload-zone {
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+#tt-file-input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  width: 100%;
+  height: 100%;
+  cursor: pointer;
+  font-size: 0;
+}
+
+.upload-zone.has-file,
+.upload-zone.dragging {
+  border-color: #7c3aed !important;
+  background: rgba(243, 232, 255, 0.45) !important;
+}
+
+.tt-file-name {
+  min-height: 18px;
+  margin: 8px 0 12px;
+  text-align: center;
+  font-size: 12px;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+html[data-theme="dark"] .tt-file-name {
+  color: #f8fafc;
+}

@@ -39,7 +39,9 @@
     threadScopeFilter: "all",
     activeThread: null,
     threadComposeScope: "public",
-    theme: localStorage.getItem("openclass_theme") || "light"
+    theme: localStorage.getItem("openclass_theme") || "light",
+    subjects: [],
+    pendingTimetableFile: null
   };
 
   function applyTheme() {
@@ -97,23 +99,17 @@
   }
 
   function getClassesSubjects() {
-    const seen = new Set();
-    const subjects = [];
-    (state.classes || []).forEach((c) => {
-      const raw = String(c.subject || "").trim();
-      if (!raw) return;
-      const cleaned = cleanSubjectName(raw);
-      const key = cleaned.toLowerCase();
-      if (!seen.has(key)) {
-        seen.add(key);
-        subjects.push(cleaned);
-      }
-    });
-    return subjects;
+    if ((state.subjects || []).length) {
+      return uniqueSubjectList(state.subjects);
+    }
+    const extras = [];
+    (state.classes || []).forEach((c) => extras.push(cleanSubjectName(c.subject)));
+    (state.assignments || []).forEach((item) => extras.push(cleanSubjectName(item.subject)));
+    return uniqueSubjectList(extras);
   }
 
   function facultyNoteSubjects() {
-    const extras = [];
+    const extras = [...(state.subjects || [])];
     (state.classes || []).forEach((item) => extras.push(cleanSubjectName(item.subject)));
     (state.assignments || []).forEach((item) => extras.push(cleanSubjectName(item.subject)));
     (state.notes || []).forEach((item) => extras.push(cleanSubjectName(item.subject)));
@@ -453,6 +449,7 @@
         if (batchRes.ok) state.batches = await batchRes.json();
         if (peopleRes.ok) state.people = await peopleRes.json();
         if (notesRes && notesRes.ok) state.notes = await notesRes.json();
+        await api.loadSubjects();
         await api.loadStudentAttendance();
         await api.loadFacultyAttendanceSummary();
         await api.loadThreads();
@@ -596,27 +593,57 @@
       }
     },
 
+    async loadSubjects() {
+      try {
+        const res = await fetch("/api/subjects", { headers: api.headers() });
+        if (!res.ok) return;
+        const data = await res.json();
+        const list = Array.isArray(data) ? data : (data.subjects || []);
+        state.subjects = uniqueSubjectList(list.map((item) => (
+          typeof item === "string" ? item : (item.subject || item.name || "")
+        )));
+      } catch (e) {
+        console.warn("Could not load ingested subjects", e);
+      }
+    },
+
     async uploadTimetable(file) {
+      const payloadFile = file || state.pendingTimetableFile;
+      if (!payloadFile) {
+        showToast("Select an .xlsx timetable file first.");
+        return;
+      }
+      state.pendingTimetableFile = payloadFile;
       state.loading = true;
       render();
       try {
         const formData = new FormData();
-        formData.append("file", file);
+        formData.append("file", payloadFile);
         formData.append("schedule_type", "weekly");
-        const res = await fetch("/api/timetables/upload", {
+        const headers = {};
+        if (state.token) headers.Authorization = `Bearer ${state.token}`;
+        const res = await fetch("/api/ingest-timetable", {
           method: "POST",
-          headers: {
-            Authorization: `Bearer ${state.token}`
-          },
+          headers,
           body: formData
         });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.detail || "Upload failed");
-        showToast(`Timetable processed: ${data.classes_detected} sessions mapped with Google Meet!`);
+        let data = {};
+        try {
+          data = await res.json();
+        } catch (parseErr) {
+          data = {};
+        }
+        if (!res.ok) {
+          const detail = data.detail;
+          const message = typeof detail === "string" ? detail : (data.message || "Upload failed");
+          throw new Error(message);
+        }
+        showToast(`Timetable ingested: ${data.filename || payloadFile.name} · ${data.classes_detected || 0} sessions mapped.`);
         state.activeModal = null;
+        state.pendingTimetableFile = null;
         await api.loadDashboardData();
       } catch (e) {
-        showToast(`Error: ${e.message}`);
+        showToast(`Timetable ingest failed: ${e.message}`);
       } finally {
         state.loading = false;
         render();
@@ -2548,7 +2575,7 @@
               <div>
                 <label class="field-label" for="assign-subject">Course Subject</label>
                 <select id="assign-subject" class="field-input" required>
-                  <option value="" disabled selected>Select course subject...</option>
+                  <option value="" disabled selected>${getClassesSubjects().length ? "Select ingested course subject..." : "No ingested subjects yet"}</option>
                   ${getClassesSubjects().map((subject) => `
                     <option value="${subject}">${subject}</option>
                   `).join("")}
@@ -2797,18 +2824,18 @@
           </div>
 
           <form id="form-upload-timetable">
-            <label class="upload-zone" id="upload-zone-tt">
+            <label class="upload-zone${state.pendingTimetableFile ? " has-file" : ""}" id="upload-zone-tt">
               ${getIcon("upload", 28)}
-              <strong style="color: var(--oc-text);">Drop university roster here</strong>
+              <strong style="color: var(--oc-text);">${state.pendingTimetableFile ? "File selected" : "Drop university roster here"}</strong>
               <span>.XLSX or .XLSM up to 10 MB</span>
-              <input type="file" id="tt-file-input" accept=".xlsx,.xlsm" style="display: none;" />
+              <input type="file" id="tt-file-input" accept=".xlsx,.xlsm,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" />
             </label>
-            <div id="tt-file-name" style="font-size: 11px; color: #61d7da; margin-bottom: 12px; text-align: center;"></div>
+            <div id="tt-file-name" class="tt-file-name">${state.pendingTimetableFile ? state.pendingTimetableFile.name : ""}</div>
 
             <div class="modal-actions">
-              <button type="button" class="secondary-btn" id="btn-cancel-modal">Cancel</button>
-              <button type="submit" class="primary-btn" id="btn-do-upload-tt" disabled>
-                ${getIcon("upload", 13)} Ingest Timetable
+              <button type="button" class="secondary-btn" id="btn-cancel-modal" ${state.loading ? "disabled" : ""}>Cancel</button>
+              <button type="submit" class="primary-btn" id="btn-do-upload-tt" ${state.pendingTimetableFile && !state.loading ? "" : "disabled"}>
+                ${state.loading ? `<span class="spinner"></span> Ingesting…` : `${getIcon("upload", 13)} Ingest Timetable`}
               </button>
             </div>
           </form>
@@ -3090,7 +3117,7 @@
 
     // Faculty dashboard action triggers
     const btnOpenUpload = document.getElementById("btn-open-upload-modal");
-    if (btnOpenUpload) btnOpenUpload.addEventListener("click", () => { state.activeModal = "upload_timetable"; render(); });
+    if (btnOpenUpload) btnOpenUpload.addEventListener("click", () => { state.pendingTimetableFile = null; state.activeModal = "upload_timetable"; render(); });
 
     const btnOpenSudden = document.getElementById("btn-open-sudden-class");
     if (btnOpenSudden) btnOpenSudden.addEventListener("click", () => { state.activeModal = "sudden_class"; render(); });
@@ -3098,11 +3125,16 @@
     const btnQuickSudden = document.getElementById("btn-quick-sudden-class");
     if (btnQuickSudden) btnQuickSudden.addEventListener("click", () => { state.activeModal = "sudden_class"; render(); });
 
+    const openAssignmentCreate = async () => {
+      await api.loadSubjects();
+      state.activeModal = "assignment_create";
+      render();
+    };
     const btnQuickAssign = document.getElementById("btn-quick-new-assignment");
-    if (btnQuickAssign) btnQuickAssign.addEventListener("click", () => { state.activeModal = "assignment_create"; render(); });
+    if (btnQuickAssign) btnQuickAssign.addEventListener("click", () => openAssignmentCreate());
 
     const btnCreateAssignView = document.getElementById("btn-create-assignment-view");
-    if (btnCreateAssignView) btnCreateAssignView.addEventListener("click", () => { state.activeModal = "assignment_create"; render(); });
+    if (btnCreateAssignView) btnCreateAssignView.addEventListener("click", () => openAssignmentCreate());
 
     const btnManageBatches = document.getElementById("btn-manage-batches");
     if (btnManageBatches) btnManageBatches.addEventListener("click", () => { state.activeModal = "manage_batches"; render(); });
@@ -3111,7 +3143,7 @@
     if (btnTriggerReminders) btnTriggerReminders.addEventListener("click", () => api.triggerReminders());
 
     const btnUploadTtView = document.getElementById("btn-upload-timetable-view");
-    if (btnUploadTtView) btnUploadTtView.addEventListener("click", () => { state.activeModal = "upload_timetable"; render(); });
+    if (btnUploadTtView) btnUploadTtView.addEventListener("click", () => { state.pendingTimetableFile = null; state.activeModal = "upload_timetable"; render(); });
 
     const btnSuddenClassView = document.getElementById("btn-sudden-class-view");
     if (btnSuddenClassView) btnSuddenClassView.addEventListener("click", () => { state.activeModal = "sudden_class"; render(); });
@@ -3371,36 +3403,56 @@
     const fileInputTt = document.getElementById("tt-file-input");
     const fileNameTt = document.getElementById("tt-file-name");
     const uploadTtBtn = document.getElementById("btn-do-upload-tt");
-    let chosenTtFile = null;
+
+    const acceptTimetableFile = (file) => {
+      if (!file) return;
+      const name = String(file.name || "").toLowerCase();
+      if (!name.endsWith(".xlsx") && !name.endsWith(".xlsm")) {
+        showToast("Please choose a .xlsx or .xlsm timetable.");
+        return;
+      }
+      state.pendingTimetableFile = file;
+      if (fileNameTt) fileNameTt.textContent = file.name;
+      if (dropZoneTt) {
+        dropZoneTt.classList.add("has-file");
+        const title = dropZoneTt.querySelector("strong");
+        if (title) title.textContent = "File selected";
+      }
+      if (uploadTtBtn) uploadTtBtn.disabled = false;
+    };
 
     if (dropZoneTt && fileInputTt) {
-      dropZoneTt.addEventListener("click", () => fileInputTt.click());
-      dropZoneTt.addEventListener("dragover", (e) => { e.preventDefault(); dropZoneTt.classList.add("dragging"); });
-      dropZoneTt.addEventListener("dragleave", () => dropZoneTt.classList.remove("dragging"));
-      dropZoneTt.addEventListener("drop", (e) => {
+      ["dragenter", "dragover"].forEach((evt) => {
+        dropZoneTt.addEventListener(evt, (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          dropZoneTt.classList.add("dragging");
+        });
+      });
+      dropZoneTt.addEventListener("dragleave", (e) => {
         e.preventDefault();
         dropZoneTt.classList.remove("dragging");
-        if (e.dataTransfer.files.length) {
-          chosenTtFile = e.dataTransfer.files[0];
-          fileNameTt.textContent = `Selected: ${chosenTtFile.name}`;
-          if (uploadTtBtn) uploadTtBtn.disabled = false;
-        }
+      });
+      dropZoneTt.addEventListener("drop", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        dropZoneTt.classList.remove("dragging");
+        acceptTimetableFile(e.dataTransfer.files[0]);
       });
       fileInputTt.addEventListener("change", () => {
-        if (fileInputTt.files.length) {
-          chosenTtFile = fileInputTt.files[0];
-          fileNameTt.textContent = `Selected: ${chosenTtFile.name}`;
-          if (uploadTtBtn) uploadTtBtn.disabled = false;
-        }
+        acceptTimetableFile(fileInputTt.files[0]);
       });
     }
 
     if (formUploadTt) {
       formUploadTt.addEventListener("submit", (e) => {
         e.preventDefault();
-        if (chosenTtFile) {
-          api.uploadTimetable(chosenTtFile);
+        const file = (fileInputTt && fileInputTt.files && fileInputTt.files[0]) || state.pendingTimetableFile;
+        if (!file) {
+          showToast("Select an .xlsx timetable file first.");
+          return;
         }
+        api.uploadTimetable(file);
       });
     }
 

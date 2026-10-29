@@ -618,7 +618,31 @@ def create_sudden_class(payload: dict, background_tasks: BackgroundTasks):
 # --- Timetable Roster Upload ---
 
 
+@app.get("/api/subjects")
+@app.get("/api/timetable/subjects")
+def list_ingested_subjects(
+    current_user: Optional[dict] = Depends(get_optional_current_user),
+):
+    """Distinct course subjects from ingested timetable class sessions."""
+    with connect() as db:
+        rows = db.execute(
+            """SELECT DISTINCT subject FROM class_sessions
+               WHERE subject IS NOT NULL AND TRIM(subject) != ''
+               ORDER BY subject COLLATE NOCASE"""
+        ).fetchall()
+    seen = set()
+    subjects = []
+    for row in rows:
+        name = _clean_subject_name(dict(row).get("subject"))
+        key = name.lower()
+        if name and key not in seen:
+            seen.add(key)
+            subjects.append(name)
+    return {"subjects": subjects}
+
+
 @app.post("/api/timetables/upload")
+@app.post("/api/ingest-timetable")
 async def upload_timetable(
     file: UploadFile = File(...),
     schedule_type: str = Form("weekly"),
