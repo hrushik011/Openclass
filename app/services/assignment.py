@@ -10,6 +10,25 @@ from fastapi import HTTPException, UploadFile
 from ..config import UPLOAD_DIR
 from ..db import connect, now
 
+ASSIGNMENT_REFERENCE_EXTENSIONS = {".pdf", ".doc", ".docx", ".xls", ".xlsx"}
+
+
+def save_assignment_reference_file(file: UploadFile, assignment_id: int) -> Tuple[str, str]:
+    original_name = file.filename or "assignment.pdf"
+    clean_name = sanitize_filename(original_name)
+    ext = Path(clean_name).suffix.lower()
+    if ext not in ASSIGNMENT_REFERENCE_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail="Attach a PDF, Word, or Excel file (.pdf, .doc, .docx, .xls, .xlsx).",
+        )
+    target_dir = UPLOAD_DIR / "assignment_briefs"
+    target_dir.mkdir(parents=True, exist_ok=True)
+    dest = target_dir / f"assign_{assignment_id}_{now().replace(':', '-')}_{clean_name}"
+    with dest.open("wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+    return str(dest), original_name
+
 def sanitize_filename(filename: str) -> str:
     # Remove any path traversal or unsafe characters
     clean = Path(filename).name

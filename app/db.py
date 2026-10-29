@@ -92,6 +92,8 @@ CREATE TABLE IF NOT EXISTS assignments (
     deadline TEXT NOT NULL,
     faculty_id INTEGER,
     faculty_name TEXT,
+    reference_file_path TEXT,
+    reference_filename TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -402,6 +404,8 @@ def initialize():
         _add_column_if_missing(db, "assignments", "faculty_id", "INTEGER")
         _add_column_if_missing(db, "assignments", "faculty_name", "TEXT")
         _add_column_if_missing(db, "assignments", "updated_at", "TEXT")
+        _add_column_if_missing(db, "assignments", "reference_file_path", "TEXT")
+        _add_column_if_missing(db, "assignments", "reference_filename", "TEXT")
         _add_column_if_missing(db, "submissions", "student_name", "TEXT")
         _add_column_if_missing(db, "submissions", "original_filename", "TEXT DEFAULT 'submission.pdf'")
         _add_column_if_missing(db, "delivery_log", "channel", "TEXT")

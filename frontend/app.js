@@ -461,14 +461,25 @@
       }
     },
 
-    async createAssignment(payload) {
+    async createAssignment(payload, file) {
       state.loading = true;
       render();
       try {
+        const formData = new FormData();
+        formData.append("title", payload.title);
+        formData.append("subject", payload.subject);
+        formData.append("batch_id", payload.batch_id);
+        formData.append("deadline", payload.deadline);
+        formData.append("description", payload.description || "");
+        if (file) {
+          formData.append("assignment_file", file);
+        }
+        const headers = api.headers();
+        delete headers["Content-Type"];
         const res = await fetch("/api/assignments", {
           method: "POST",
-          headers: api.headers(),
-          body: JSON.stringify(payload)
+          headers,
+          body: formData
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.detail || "Failed to create assignment");
@@ -1198,6 +1209,11 @@
     const isStudent = state.loginTab === "STUDENT";
     return `
       <div class="login-screen">
+        <div class="login-bg-rings" aria-hidden="true">
+          <span class="login-ring login-ring-a"></span>
+          <span class="login-ring login-ring-b"></span>
+          <span class="login-ring login-ring-c"></span>
+        </div>
         <div class="login-card">
           <div class="login-brand">
             ${renderOpenclassLogo(36)}
@@ -2191,6 +2207,11 @@
                 <p style="font-size: 11px; color: var(--oc-muted); margin: 10px 0; line-height: 1.5;">
                   ${a.description || "Review problem description and submit your source code or report."}
                 </p>
+                ${a.reference_filename || a.has_reference_file ? `
+                  <a href="/api/assignments/${a.id}/file" class="mini-btn" style="margin-bottom: 10px; display: inline-flex;" download>
+                    ${getIcon("download", 12)} Reference: ${a.reference_filename || "Download file"}
+                  </a>
+                ` : ""}
 
                 <!-- Actions for Faculty vs Student -->
                 <div class="assignment-actions">
@@ -2544,6 +2565,16 @@
 
             <label class="field-label" for="assign-desc">Instructions & Guidelines</label>
             <textarea id="assign-desc" class="field-input" style="height: 60px; resize: none;" placeholder="Instructions for the students..."></textarea>
+
+            <label class="field-label" for="assign-file">Attach Reference File</label>
+            <input
+              id="assign-file"
+              name="assignment_file"
+              class="field-input"
+              type="file"
+              accept=".pdf,.doc,.docx,.xls,.xlsx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            />
+            <p style="font-size: 10px; color: var(--oc-muted); margin: -6px 0 12px;">PDF, Word, or Excel (.pdf, .doc, .docx, .xls, .xlsx). Optional.</p>
 
             <div style="background: rgba(167, 139, 250, 0.1); border: 1px solid rgba(167, 139, 250, 0.2); border-radius: 8px; padding: 10px 12px; margin-bottom: 14px; font-size: 10px; color: var(--oc-muted); display: flex; align-items: center; gap: 8px;">
               ${getIcon("shield", 14)}
@@ -3238,6 +3269,8 @@
         const batch_id = document.getElementById("assign-batch").value.trim();
         const deadline = document.getElementById("assign-deadline").value;
         const description = document.getElementById("assign-desc").value.trim();
+        const fileInput = document.getElementById("assign-file");
+        const file = fileInput && fileInput.files && fileInput.files[0] ? fileInput.files[0] : null;
 
         api.createAssignment({
           title,
@@ -3245,7 +3278,7 @@
           batch_id,
           deadline: new Date(deadline).toISOString(),
           description
-        });
+        }, file);
       });
     }
 

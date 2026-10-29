@@ -59,6 +59,7 @@ from .gmail_sender import send_email
 from .google_meet import build_meeting_launch_url, create_meeting_space
 from .services.assignment import (
     create_assignment_zip_archive,
+    save_assignment_reference_file,
     save_student_submission,
 )
 from .services.notification import NotificationService
@@ -833,6 +834,7 @@ def list_assignments(
 
             item["submission_count"] = sub_count
             item["total_students"] = total_students
+            item["has_reference_file"] = bool(item.get("reference_filename") or item.get("reference_file_path"))
 
             # Student specific submission state
             item["has_submitted"] = False
@@ -864,19 +866,16 @@ def list_assignments(
         return assignments
 
 
-@app.post("/api/assignments")
-def create_assignment(
-    payload: AssignmentCreate,
-    background_tasks: BackgroundTasks,
-    current_user: Optional[dict] = Depends(get_optional_current_user),
-):
-    """
-    Faculty creates a new assignment portal.
-    Automatically triggers formatted assignment notification emails to all enrolled students in target batch.
-    """
-    faculty_id = current_user.get("id") if current_user else 1
-    faculty_name = current_user.get("name") if current_user else "Priya Menon"
-
+def persist_new_assignment(
+    title: str,
+    subject: str,
+    batch_id: str,
+    deadline: str,
+    description: Optional[str],
+    faculty_id,
+    faculty_name: str,
+    assignment_file: Optional[UploadFile] = None,
+) -> dict:
     stamp = now()
     with connect() as db:
         cursor = db.execute(
@@ -885,12 +884,12 @@ def create_assignment(
                 faculty_id, faculty_name, created_at, updated_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
-                payload.title,
-                payload.description,
-                payload.subject,
+                title,
+                description,
+                subject,
                 "CS-201",
-                payload.batch_id,
-                payload.deadline,
+                batch_id,
+                deadline,
                 faculty_id,
                 faculty_name,
                 stamp,
@@ -898,11 +897,52 @@ def create_assignment(
             ),
         )
         assignment_id = cursor.lastrowid
-        row = db.execute("SELECT * FROM assignments WHERE id = ?", (assignment_id,)).fetchone()
-        created = dict(row)
 
-    # Automated background email notification to enrolled students
-    target_students = get_batch_student_recipients(payload.batch_id)
+        file_path = None
+        original_name = None
+        if assignment_file and assignment_file.filename:
+            file_path, original_name = save_assignment_reference_file(assignment_file, assignment_id)
+            db.execute(
+                """UPDATE assignments
+                   SET reference_file_path = ?, reference_filename = ?
+                   WHERE id = ?""",
+                (file_path, original_name, assignment_id),
+            )
+
+        row = db.execute("SELECT * FROM assignments WHERE id = ?", (assignment_id,)).fetchone()
+        return dict(row)
+
+
+@app.post("/api/assignments")
+async def create_assignment(
+    background_tasks: BackgroundTasks,
+    title: str = Form(...),
+    subject: Optional[str] = Form("Data Structures"),
+    batch_id: str = Form(...),
+    deadline: str = Form(...),
+    description: Optional[str] = Form(None),
+    assignment_file: Optional[UploadFile] = File(None),
+    current_user: Optional[dict] = Depends(get_optional_current_user),
+):
+    """
+    Faculty creates a new assignment portal, optionally attaching a reference file
+    (PDF / Word / Excel) for the target student batch.
+    """
+    faculty_id = current_user.get("id") if current_user else 1
+    faculty_name = current_user.get("name") if current_user else "Priya Menon"
+
+    created = persist_new_assignment(
+        title=title,
+        subject=subject or "Data Structures",
+        batch_id=batch_id,
+        deadline=deadline,
+        description=description,
+        faculty_id=faculty_id,
+        faculty_name=faculty_name,
+        assignment_file=assignment_file,
+    )
+
+    target_students = get_batch_student_recipients(batch_id)
 
     def dispatch_assignment_announcement():
         NotificationService.broadcast_assignment_created(created, target_students)
@@ -912,7 +952,28 @@ def create_assignment(
     created["submission_count"] = 0
     created["total_students"] = len(target_students) or 42
     created["has_submitted"] = False
+    created["has_reference_file"] = bool(created.get("reference_filename"))
     return created
+
+
+@app.get("/api/assignments/{assignment_id}/file")
+def download_assignment_reference(assignment_id: int):
+    with connect() as db:
+        row = db.execute("SELECT * FROM assignments WHERE id = ?", (assignment_id,)).fetchone()
+        if not row:
+            raise HTTPException(404, "Assignment not found.")
+        item = dict(row)
+    path_value = item.get("reference_file_path")
+    if not path_value:
+        raise HTTPException(404, "No reference file is attached to this assignment.")
+    path = Path(path_value)
+    if not path.exists():
+        raise HTTPException(404, "Reference file is missing on disk.")
+    return FileResponse(
+        path,
+        filename=item.get("reference_filename") or path.name,
+        media_type="application/octet-stream",
+    )
 
 
 @app.put("/api/assignments/{assignment_id}")

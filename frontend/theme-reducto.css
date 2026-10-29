@@ -176,7 +176,101 @@ html[data-theme="dark"] .reducto-topbar {
 }
 
 .login-screen {
-  background: var(--oc-bg-alt) !important;
+  background:
+    radial-gradient(circle at 12% 88%, rgba(243, 232, 255, 0.9) 0%, transparent 42%),
+    radial-gradient(circle at 88% 8%, rgba(237, 233, 254, 0.95) 0%, transparent 38%),
+    var(--oc-bg-alt) !important;
+  position: relative;
+  overflow: hidden;
+}
+
+.login-screen::before,
+.login-screen::after {
+  content: "";
+  position: absolute;
+  border-radius: 50%;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.login-screen::before {
+  width: 560px;
+  height: 560px;
+  top: -220px;
+  right: -180px;
+  border: 48px solid rgba(124, 58, 237, 0.12);
+  background: radial-gradient(circle, rgba(243, 232, 255, 0.55) 0%, transparent 68%);
+}
+
+.login-screen::after {
+  width: 440px;
+  height: 440px;
+  bottom: -180px;
+  left: -160px;
+  border: 32px solid rgba(124, 58, 237, 0.1);
+  background: transparent;
+}
+
+.login-bg-rings {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+  z-index: 0;
+}
+
+.login-ring {
+  position: absolute;
+  border-radius: 50%;
+  border: 2px solid rgba(124, 58, 237, 0.16);
+}
+
+.login-ring-a {
+  width: 280px;
+  height: 280px;
+  top: 12%;
+  left: -70px;
+  border-width: 22px;
+  border-color: rgba(167, 139, 250, 0.18);
+}
+
+.login-ring-b {
+  width: 180px;
+  height: 180px;
+  bottom: 18%;
+  right: 8%;
+  border-width: 16px;
+  border-color: rgba(124, 58, 237, 0.14);
+}
+
+.login-ring-c {
+  width: 90px;
+  height: 90px;
+  top: 28%;
+  right: 18%;
+  border-width: 10px;
+  border-color: rgba(109, 40, 217, 0.16);
+}
+
+.login-screen .login-card {
+  position: relative;
+  z-index: 1;
+}
+
+html[data-theme="dark"] .login-screen {
+  background:
+    radial-gradient(circle at 12% 88%, rgba(124, 58, 237, 0.18) 0%, transparent 42%),
+    radial-gradient(circle at 88% 8%, rgba(139, 92, 246, 0.16) 0%, transparent 38%),
+    var(--oc-bg) !important;
+}
+
+html[data-theme="dark"] .login-screen::before {
+  border-color: rgba(167, 139, 250, 0.22);
+  background: radial-gradient(circle, rgba(91, 33, 182, 0.18) 0%, transparent 68%);
+}
+
+html[data-theme="dark"] .login-screen::after {
+  border-color: rgba(139, 92, 246, 0.18);
 }
 
 .login-card {

@@ -10,7 +10,7 @@ from app.main import (
     get_session_meet_link,
     create_sudden_class,
     list_assignments,
-    create_assignment,
+    persist_new_assignment,
     update_assignment,
     delete_assignment,
     get_submissions,
@@ -80,16 +80,14 @@ print("   Meeting URL:", sudden["meeting_url"])
 print("   Host Controls:", sudden["host_controls"]["sole_host"])
 
 # 7. Assignment Creation (Faculty)
-new_assign = create_assignment(
-    AssignmentCreate(
-        title="Assignment 5: Dynamic Programming & Memoization",
-        subject="Data Structures",
-        batch_id="CS-2A",
-        deadline="2026-10-25T23:59:00Z",
-        description="Solve 0/1 Knapsack and Matrix Chain Multiplication with top-down memoization.",
-    ),
-    background_tasks=bg,
-    current_user=fac_user,
+new_assign = persist_new_assignment(
+    title="Assignment 5: Dynamic Programming & Memoization",
+    subject="Data Structures",
+    batch_id="CS-2A",
+    deadline="2026-10-25T23:59:00Z",
+    description="Solve 0/1 Knapsack and Matrix Chain Multiplication with top-down memoization.",
+    faculty_id=fac_user.get("id") if fac_user else 1,
+    faculty_name=(fac_user.get("name") if fac_user else "Priya Menon"),
 )
 assign_id = new_assign["id"]
 print("7. Assignment Created OK: ID =", assign_id, "Title =", new_assign["title"])
