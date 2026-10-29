@@ -42,6 +42,7 @@
     theme: localStorage.getItem("openclass_theme") || "light",
     subjects: [],
     batchesBySubject: {},
+    rosterStatus: null,
     pendingTimetableFile: null
   };
 
@@ -83,6 +84,42 @@
     return String(raw)
       .replace(/\s+(CS-[0-9][A-Z0-9]*|[A-Z]{2,3}-[0-9][A-Z0-9]*)$/i, "")
       .trim() || String(raw).trim();
+  }
+
+  function normalizeBatch(batchName) {
+    const raw = String(batchName || "").trim().toLowerCase();
+    if (!raw || raw === "all batches" || raw === "all" || raw === "*") return "ALL";
+    const numbered = raw.match(/\b(?:batch[\s\-]*|b[\s\-]*)(\d+)\b/i);
+    if (numbered) return `B${numbered[1]}`;
+    const program = raw.match(/\b([a-z]{1,6})[\s\-]*(\d+)([a-z])?\b/i);
+    if (program) return `B${program[2]}`;
+    const compact = raw.replace(/[^a-z0-9]+/g, "");
+    const compactMatch = compact.match(/^(?:batch|b)?(\d+)$/);
+    if (compactMatch) return `B${compactMatch[1]}`;
+    return compact || raw;
+  }
+
+  function batchesMatch(left, right) {
+    const a = normalizeBatch(left);
+    const b = normalizeBatch(right);
+    return a === "ALL" || b === "ALL" || (a && b && a === b);
+  }
+
+  function applyViewerProfile(payload) {
+    if (!payload || !state.user) return;
+    if (payload.viewer_batch) state.user.batch_id = payload.viewer_batch;
+    if (payload.viewer_name) state.user.name = payload.viewer_name;
+    try {
+      localStorage.setItem("openclass_user", JSON.stringify(state.user));
+    } catch (e) {}
+  }
+
+  function assignmentsForViewer(list) {
+    const items = Array.isArray(list) ? list : [];
+    const role = String((state.user && state.user.role) || "").toUpperCase();
+    if (role !== "STUDENT") return items;
+    const batch = state.user && state.user.batch_id;
+    return items.filter((item) => batchesMatch(item && item.batch_id, batch));
   }
 
   function uniqueSubjectList(items = []) {
@@ -138,11 +175,17 @@
     return opts.join("");
   }
 
-  function batchSelectOptions(batches, selected) {
+  function batchSelectOptions(batches, selected, enabled = true) {
+    if (!enabled) {
+      return `<option value="" selected disabled>Select a course subject first</option>`;
+    }
     const list = (batches && batches.length) ? batches : ["All Batches"];
     const preferred = selected || "All Batches";
     return list.map((batch) => {
-      const isSelected = String(batch).toLowerCase() === String(preferred).toLowerCase();
+      const preferredCanon = normalizeBatch(preferred);
+      const isSelected = preferredCanon === "ALL"
+        ? normalizeBatch(batch) === "ALL"
+        : batchesMatch(batch, preferred);
       return `<option value="${escapeAttr(batch)}" ${isSelected ? "selected" : ""}>${escapeAttr(batch)}</option>`;
     }).join("");
   }
@@ -476,11 +519,12 @@
           fetch("/api/notes", { headers: api.headers() })
         ]);
         if (clsRes.ok) state.classes = await clsRes.json();
-        if (assignRes.ok) state.assignments = await assignRes.json();
+        if (assignRes.ok) state.assignments = assignmentsForViewer(await assignRes.json());
         if (batchRes.ok) state.batches = await batchRes.json();
         if (peopleRes.ok) state.people = await peopleRes.json();
         if (notesRes && notesRes.ok) state.notes = await notesRes.json();
         await api.loadSubjects();
+        await api.loadRosterStatus();
         await api.loadStudentAttendance();
         await api.loadFacultyAttendanceSummary();
         await api.loadThreads();
@@ -638,9 +682,20 @@
       }
     },
 
+    async loadRosterStatus() {
+      try {
+        const res = await fetch("/api/roster/status", { headers: api.headers() });
+        if (!res.ok) return;
+        state.rosterStatus = await res.json();
+        applyViewerProfile(state.rosterStatus);
+      } catch (e) {
+        console.warn("Could not load roster status", e);
+      }
+    },
+
     async loadBatchesForSubject(subject) {
       const key = String(subject || "").trim();
-      if (!key) return ["All Batches"];
+      if (!key) return [];
       if (state.batchesBySubject[key]) return state.batchesBySubject[key];
       try {
         const res = await fetch(`/api/subjects/batches?subject=${encodeURIComponent(key)}`, {
@@ -1623,6 +1678,14 @@
     const user = state.user || {};
     const todayClasses = state.classes.slice(0, 3);
     const activeAssignments = state.assignments.slice(0, 4);
+    const roster = state.rosterStatus || {};
+    const todayStats = (state.facultyAttendance && state.facultyAttendance.today) || {};
+    const batchCards = (state.facultyAttendance && state.facultyAttendance.batch_overview)
+      || (state.batches || []);
+    const learnerCount = batchCards.reduce((sum, item) => sum + Number(item.learner_count || 0), 0);
+    const ingestLabel = roster.filename
+      ? `${roster.filename} · ${roster.session_count || 0} sessions`
+      : (roster.ingested ? `${roster.session_count || state.classes.length} persisted sessions` : "No roster ingested yet");
 
     return `
       <div class="faculty-view">
@@ -1645,7 +1708,7 @@
           <section class="panel management-card">
             <div class="panel-head">
               <div class="panel-title">${getIcon("calendar", 15)} Timetable & Ingestion</div>
-              <span class="panel-meta">CS-2A · 42 learners</span>
+              <span class="panel-meta">${ingestLabel}</span>
             </div>
             <div class="management-body">
               <div class="roster-upload">
@@ -1656,6 +1719,21 @@
                 </div>
                 <button class="secondary-btn" id="btn-open-upload-modal">Upload roster</button>
               </div>
+              ${todayClasses.length ? `
+                <div class="schedule-list" style="margin-top: 10px;">
+                  ${todayClasses.map((c, i) => `
+                    <div class="schedule-item">
+                      <div class="schedule-time">${c.start_time || "—"}</div>
+                      <div class="schedule-bar"></div>
+                      <div class="schedule-details">
+                        <strong>${c.subject}</strong>
+                        <span>${c.faculty_name || "Faculty"} · ${c.batch || "All Batches"}</span>
+                      </div>
+                      ${i === 0 ? `<span class="status-pill">NEXT</span>` : ""}
+                    </div>
+                  `).join("")}
+                </div>
+              ` : `<p style="font-size: 11px; color: var(--oc-muted); margin: 8px 0 0;">No persisted lectures yet. Upload the university roster once; it stays available for every later login.</p>`}
 
               <div class="faculty-stats">
                 <div class="faculty-stat">
@@ -1669,7 +1747,7 @@
                 </div>
                 <div class="faculty-stat">
                   <span>Attendance today</span>
-                  <strong>38 <small>/ 42</small></strong>
+                  <strong>${Number(todayStats.present || 0)} <small>/ ${Number(todayStats.enrolled || learnerCount || 0)}</small></strong>
                   <button class="text-action" id="btn-trigger-reminders">⚡ Batch Reminders</button>
                 </div>
               </div>
@@ -1690,7 +1768,7 @@
                     <strong>${a.title}</strong>
                     <span>Deadline · ${formatDeadline(a.deadline)} · ${a.batch_id}</span>
                   </div>
-                  <span class="status-pill">${a.submission_count || 0} / ${a.total_students || 42}</span>
+                  <span class="status-pill">${a.submission_count || 0} / ${a.total_students || 0}</span>
                 </div>
               `).join("") : `<p style="font-size: 11px; color: var(--oc-muted);">No assignment portals created yet.</p>`}
 
@@ -1721,22 +1799,21 @@
             <button class="muted-btn" id="btn-manage-batches">Manage batches ${getIcon("arrowRight", 12)}</button>
           </div>
           <div class="batch-grid">
-            <div class="batch-card">
-              <div>
-                <span class="batch-kicker">CS-2A · Data Structures</span>
-                <strong>38 / 42 present</strong>
-                <small>90% attendance today</small>
-              </div>
-              <div class="progress-ring"><span>90%</span></div>
-            </div>
-            <div class="batch-card">
-              <div>
-                <span class="batch-kicker">CS-1B · Algorithms</span>
-                <strong>33 / 36 present</strong>
-                <small>92% attendance today</small>
-              </div>
-              <div class="progress-ring teal"><span>92%</span></div>
-            </div>
+            ${batchCards.length ? batchCards.map((batch, idx) => {
+              const present = Number(batch.present_today != null ? batch.present_today : 0);
+              const enrolled = Number(batch.learner_count || 0);
+              const pct = Number(batch.percentage != null ? batch.percentage : (enrolled ? Math.round((present / enrolled) * 100) : 0));
+              return `
+                <div class="batch-card">
+                  <div>
+                    <span class="batch-kicker">${batch.name}${batch.subject ? " · " + batch.subject : ""}</span>
+                    <strong>${present} / ${enrolled} present</strong>
+                    <small>${pct}% attendance today</small>
+                  </div>
+                  <div class="progress-ring${idx ? " teal" : ""}"><span>${pct}%</span></div>
+                </div>
+              `;
+            }).join("") : `<p style="font-size: 11px; color: var(--oc-muted); padding: 8px 0;">No batch roster yet. Ingest the university timetable to populate live attendance cards.</p>`}
             <div class="faculty-note">
               ${getIcon("sparkles", 15)}
               <div>
@@ -1767,8 +1844,8 @@
             </div>
             <div>
               <label class="field-label" for="notes-specialization">Target Batch</label>
-              <select id="notes-specialization" name="specialization" class="field-input">
-                ${batchSelectOptions(["All Batches"], "All Batches")}
+              <select id="notes-specialization" name="specialization" class="field-input" disabled>
+                ${batchSelectOptions([], "", false)}
               </select>
             </div>
             <div>
@@ -2017,22 +2094,19 @@
   // --- 4. Student Dashboard ---
   function renderStudentDashboard() {
     const user = state.user || {};
-    const upNext = state.classes[0] || {
-      id: 1,
-      subject: "Data Structures CS-2A",
-      start_time: "10:00",
-      faculty_name: "Professor Iyer",
-      google_meet_url: "https://meet.google.com/dks-pqnr-kty"
-    };
-
+    const studentBatch = user.batch_id || "your batch";
+    const upNext = (state.classes && state.classes[0]) || null;
     const allAssignments = state.assignments || [];
     const pendingAssignments = allAssignments.filter((a) => !a.has_submitted);
+    const graphSubject = upNext ? cleanSubjectName(upNext.subject) : (state.subjects[0] || "No class yet");
+    const graphAssignment = pendingAssignments[0] || allAssignments[0];
+    const graphNote = (state.notes || [])[0];
 
     return `
       <div class="student-view">
         <div class="hero-row">
           <div>
-            <div class="eyebrow">Student Portal · Batch ${user.batch_id || "CS-2A"}</div>
+            <div class="eyebrow">Student Portal · Batch ${studentBatch}</div>
             <h1 class="hero-title">Good morning, <span class="accent">${user.name || "Student"}.</span></h1>
             <p class="hero-copy">Your personalized learning space, arranged around lectures, submissions, and class notes.</p>
           </div>
@@ -2046,19 +2120,25 @@
         <div class="dashboard-grid">
           <!-- Up Next Class Card (with Strict Host Google Meet Integration) -->
           <div class="class-card panel">
-            <div class="class-overline"><span class="live-dot"></span> Up next · Today</div>
-            <div class="class-title">${upNext.subject}</div>
-            <div class="class-sub">Faculty: ${upNext.faculty_name || "Course Lead"} · Starts at ${upNext.start_time || "10:00"}</div>
-            <div class="class-right">
-              <div class="count-label">starts at</div>
-              <div class="count">${upNext.start_time || "10:00"}</div>
-              <button class="meet-btn" data-action="launch-meet" data-id="${upNext.id}">
-                ${getIcon("video", 14)} Join Google Meet as Student
-              </button>
-              <div class="restricted-badge-chip">
-                ${getIcon("shield", 10)} Restricted Participant Mode · Host controls enforced
+            ${upNext ? `
+              <div class="class-overline"><span class="live-dot"></span> Up next · ${upNext.weekday || "Today"}</div>
+              <div class="class-title">${upNext.subject}</div>
+              <div class="class-sub">Faculty: ${upNext.faculty_name || "Course Lead"} · Starts at ${upNext.start_time || "—"} · ${upNext.batch || studentBatch}</div>
+              <div class="class-right">
+                <div class="count-label">starts at</div>
+                <div class="count">${upNext.start_time || "—"}</div>
+                <button class="meet-btn" data-action="launch-meet" data-id="${upNext.id}">
+                  ${getIcon("video", 14)} Join Google Meet as Student
+                </button>
+                <div class="restricted-badge-chip">
+                  ${getIcon("shield", 10)} Restricted Participant Mode · Host controls enforced
+                </div>
               </div>
-            </div>
+            ` : `
+              <div class="class-overline">Schedule</div>
+              <div class="class-title">No lectures mapped for ${studentBatch}</div>
+              <div class="class-sub">Once the university timetable is ingested, sessions for your batch appear here automatically.</div>
+            `}
           </div>
 
           <!-- Knowledge Graph Card -->
@@ -2077,15 +2157,15 @@
               </svg>
               <div class="graph-node central n-center">
                 <div class="node-kicker">Current class</div>
-                <span class="node-name">Data Structures CS-2A</span>
+                <span class="node-name">${graphSubject}</span>
               </div>
               <div class="graph-node n-top">
                 <div class="node-kicker">Document</div>
-                <span class="node-name">Lecture Notes</span>
+                <span class="node-name">${graphNote ? (graphNote.title || graphNote.subject) : "Lecture Notes"}</span>
               </div>
               <div class="graph-node n-left">
                 <div class="node-kicker">Assignment</div>
-                <span class="node-name">Graph Traversal</span>
+                <span class="node-name">${graphAssignment ? graphAssignment.title : "No assignment"}</span>
               </div>
               <div class="graph-node n-right">
                 <div class="node-kicker">Updates</div>
@@ -2099,20 +2179,20 @@
             <section class="panel schedule-panel">
               <div class="panel-head">
                 <div class="panel-title">${getIcon("calendar", 15)} Today’s Rhythm</div>
-                <span class="panel-meta">${state.classes.length || 3} sessions</span>
+                <span class="panel-meta">${state.classes.length} session${state.classes.length === 1 ? "" : "s"}</span>
               </div>
               <div class="schedule-list">
-                ${state.classes.slice(0, 3).map((c, i) => `
+                ${state.classes.length ? state.classes.slice(0, 5).map((c, i) => `
                   <div class="schedule-item">
                     <div class="schedule-time">${c.start_time}</div>
                     <div class="schedule-bar"></div>
                     <div class="schedule-details">
                       <strong>${c.subject}</strong>
-                      <span>${c.faculty_name || "Faculty"} · ${c.batch || "CS-2A"}</span>
+                      <span>${c.faculty_name || "Faculty"} · ${c.batch || studentBatch}</span>
                     </div>
                     ${i === 0 ? `<span class="status-pill">NEXT</span>` : ""}
                   </div>
-                `).join("")}
+                `).join("") : `<p style="font-size: 11px; color: var(--oc-muted); padding: 8px 4px;">No timetable slots for ${studentBatch} yet.</p>`}
               </div>
             </section>
           </div>
@@ -2140,7 +2220,7 @@
                         ${isUrgent ? `<span class="deadline-badge deadline-urgent" style="font-size: 8px;">${getIcon("clock", 10)} Due in ${Math.round(a.hours_remaining)}h</span>` : ""}
                       </div>
                       <span style="font-size: 10px; color: var(--oc-muted); margin-top: 3px; display: block;">
-                        <strong>Deadline:</strong> ${formatDeadline(a.deadline)} · Faculty: ${a.faculty_name || "Course Lead"} · Batch: ${a.batch_id || user.batch_id || "CS-2A"}
+                        <strong>Deadline:</strong> ${formatDeadline(a.deadline)} · Faculty: ${a.faculty_name || "Course Lead"} · Batch: ${a.batch_id || studentBatch}
                       </span>
                     </div>
                   </div>
@@ -2158,7 +2238,7 @@
                 </div>
                 <div style="color: var(--oc-text); font-weight: 700; font-size: 12px;">All Caught Up!</div>
                 <p style="font-size: 11px; margin-top: 4px; color: var(--oc-muted);">
-                  ${allAssignments.length > 0 ? "You have submitted all active assignments for your batch." : `No active assignments posted for batch ${user.batch_id || "CS-2A"} right now.`}
+                  ${allAssignments.length > 0 ? "You have submitted all active assignments for your batch." : `No active assignments posted for batch ${studentBatch} right now.`}
                 </p>
               </div>
             `}
@@ -2240,7 +2320,7 @@
             <h1 class="hero-title">${isFaculty ? "Assignments & Submissions." : "Your Course Assignments."}</h1>
             <p class="hero-copy">${isFaculty
         ? "Create portals, edit or extend deadlines dynamically, and inspect student submissions."
-        : `Active assignments filtered strictly for your enrolled batch (${state.user?.batch_id || "CS-2A"}).`}</p>
+        : `Active assignments for your enrolled batch (${state.user?.batch_id || "your batch"}), including equivalent labels such as Batch 2 / CS-2A and All Batches.`}</p>
           </div>
           <div>
             ${isFaculty ? `
@@ -2264,11 +2344,11 @@
                   <div>
                     <div class="assignment-card-title">${a.title}</div>
                     <div class="assignment-card-meta">
-                      <span><strong>Course:</strong> ${a.subject || "Data Structures"}</span>
+                      <span><strong>Course:</strong> ${a.subject || "Course"}</span>
                       <span>•</span>
-                      <span><strong>Batch:</strong> ${a.batch_id}</span>
+                      <span><strong>Batch:</strong> ${a.batch_id || "All Batches"}</span>
                       <span>•</span>
-                      <span><strong>Faculty:</strong> ${a.faculty_name || "Priya Menon"}</span>
+                      <span><strong>Faculty:</strong> ${a.faculty_name || "Course Faculty"}</span>
                     </div>
                   </div>
 
@@ -2295,7 +2375,7 @@
                 <!-- Actions for Faculty vs Student -->
                 <div class="assignment-actions">
                   ${isFaculty ? `
-                    <span class="status-pill" style="font-size: 10px;">${a.submission_count || 0} / ${a.total_students || 42} submitted</span>
+                    <span class="status-pill" style="font-size: 10px;">${a.submission_count || 0} / ${a.total_students || 0} submitted</span>
                     <button class="mini-btn" data-action="edit-assignment" data-id="${a.id}">
                       ${getIcon("edit", 12)} Edit Deadline & Portal
                     </button>
@@ -2417,11 +2497,7 @@
   // --- 7. People Directory View ---
   function renderPeopleView() {
     const isFaculty = state.role === "faculty";
-    const people = state.people.length > 0 ? state.people : [
-      { full_name: "Priya Menon", email: "priya.menon@college.edu", phone: "+919876543210" },
-      { full_name: "Professor Iyer", email: "iyer@college.edu", phone: "+919876543211" },
-      { full_name: "Dr. Nandita Bose", email: "bose@college.edu", phone: "+919876543212" }
-    ];
+    const people = state.people || [];
 
     return `
       <div class="directory-view">
@@ -2435,6 +2511,7 @@
         </div>
 
         <div class="people-grid">
+          ${!people.length ? `<p style="font-size: 11px; color: var(--oc-muted);">No faculty records in the directory yet.</p>` : ""}
           ${people.map((p) => {
       const inits = (p.full_name || "Faculty").split(" ").map((n) => n[0]).join("").slice(0, 2).toUpperCase();
       return `
@@ -2632,8 +2709,8 @@
               </div>
               <div>
                 <label class="field-label" for="assign-batch">Target Batch</label>
-                <select id="assign-batch" class="field-input" required>
-                  ${batchSelectOptions(["All Batches"], "All Batches")}
+                <select id="assign-batch" class="field-input" required disabled>
+                  ${batchSelectOptions([], "", false)}
                 </select>
               </div>
             </div>
@@ -2705,8 +2782,8 @@
               </div>
               <div>
                 <label class="field-label" for="edit-batch">Target Batch</label>
-                <select id="edit-batch" class="field-input" required>
-                  ${batchSelectOptions(state.batchesBySubject[a.subject] || ["All Batches", a.batch_id].filter(Boolean), a.batch_id || "All Batches")}
+                <select id="edit-batch" class="field-input" required ${a.subject ? "" : "disabled"}>
+                  ${batchSelectOptions(state.batchesBySubject[a.subject] || ["All Batches", a.batch_id].filter(Boolean), a.batch_id || "All Batches", Boolean(a.subject))}
                 </select>
               </div>
             </div>
@@ -2823,8 +2900,8 @@
               </div>
               <div>
                 <label class="field-label" for="sudden-batch">Target Batch</label>
-                <select id="sudden-batch" class="field-input" required>
-                  ${batchSelectOptions(["All Batches"], "All Batches")}
+                <select id="sudden-batch" class="field-input" required disabled>
+                  ${batchSelectOptions([], "", false)}
                 </select>
               </div>
             </div>
@@ -2921,16 +2998,16 @@
           </div>
 
           <div style="display: grid; gap: 8px; margin: 14px 0;">
-            ${batches.map((b) => `
+            ${batches.length ? batches.map((b) => `
               <div class="schedule-item" style="background: rgba(255,255,255,0.02); padding: 11px; border-radius: 8px; border: 1px solid rgba(147,133,204,0.15);">
-                <div class="avatar" style="width: 27px; height: 27px;">${b.name.slice(0, 2)}</div>
+                <div class="avatar" style="width: 27px; height: 27px;">${String(b.name || "B").slice(0, 2)}</div>
                 <div class="schedule-details">
-                  <strong>Batch ${b.name}</strong>
-                  <span>${b.learner_count || 42} enrolled learners · active</span>
+                  <strong>${b.name}</strong>
+                  <span>${b.learner_count || 0} enrolled learners${b.subject ? " · " + b.subject : ""}</span>
                 </div>
                 ${getIcon("check", 15, "accent")}
               </div>
-            `).join("")}
+            `).join("") : `<p style="font-size: 11px; color: var(--oc-muted);">No batches in the ingested roster yet.</p>`}
           </div>
 
           <div class="modal-actions">
@@ -2986,14 +3063,14 @@
               <div>
                 <label class="field-label" for="thread-subject-input">Course Subject</label>
                 <select id="thread-subject-input" class="field-input">
-                  ${subjectSelectOptions(subjects[0] || "")}
+                  ${subjectSelectOptions("")}
                 </select>
               </div>
               <div>
                 <label class="field-label" for="thread-batch-input">Target Batch</label>
                 ${isFaculty ? `
-                  <select id="thread-batch-input" class="field-input">
-                    ${batchSelectOptions(["All Batches"], "All Batches")}
+                  <select id="thread-batch-input" class="field-input" disabled>
+                    ${batchSelectOptions([], "", false)}
                   </select>
                 ` : `
                   <input id="thread-batch-input" class="field-input" value="${studentBatch}" readonly />
@@ -3134,12 +3211,23 @@
     if (!subjectEl || !batchEl || String(batchEl.tagName).toUpperCase() !== "SELECT") return;
     const fillBatches = async () => {
       const subject = subjectEl.value;
+      if (!subject) {
+        batchEl.disabled = true;
+        batchEl.innerHTML = batchSelectOptions([], "", false);
+        return;
+      }
+      batchEl.disabled = true;
       const previous = batchEl.value;
       const batches = await api.loadBatchesForSubject(subject);
-      batchEl.innerHTML = batchSelectOptions(batches, previous);
+      batchEl.innerHTML = batchSelectOptions(batches, previous, true);
+      batchEl.disabled = false;
     };
     subjectEl.addEventListener("change", fillBatches);
     if (subjectEl.value) fillBatches();
+    else {
+      batchEl.disabled = true;
+      batchEl.innerHTML = batchSelectOptions([], "", false);
+    }
   }
 
   // --- 10. Workspace Event Bindings ---

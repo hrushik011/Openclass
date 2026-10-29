@@ -65,14 +65,23 @@ from .services.assignment import (
 from .services.notification import NotificationService
 from .services.reminders import check_and_send_assignment_reminders
 from .services.roster import (
+    assignment_visible_to_student,
+    batches_compatible,
+    faculty_match_keys,
+    is_all_batches,
     is_generalist_user,
     list_batches_for_subject,
     list_subjects_for_user,
+    listed_roster_batches,
+    note_visible_to_student,
+    persist_student_roster,
     rebuild_faculty_subject_batches,
     roster_status,
+    session_visible_to_user,
+    student_subscribed_subjects,
     _session_exists,
 )
-from .timetable_parser import parse_timetable
+from .timetable_parser import parse_student_roster, parse_timetable
 
 
 logger = logging.getLogger("openclass.main")
@@ -495,24 +504,42 @@ def list_classes(
     If student is authenticated, filters by student's batch.
     """
     with connect() as db:
-        filter_batch = batch
-        if not filter_batch and current_user and str(current_user.get("role")).upper() == "STUDENT":
-            filter_batch = current_user.get("batch_id")
-
-        if filter_batch:
-            rows = db.execute(
-                """SELECT * FROM class_sessions
-                   WHERE batch = ? OR subject LIKE '%' || ? || '%'
-                   ORDER BY class_date, weekday, start_time""",
-                (filter_batch, filter_batch),
-            ).fetchall()
-        else:
-            rows = db.execute("SELECT * FROM class_sessions ORDER BY class_date, weekday, start_time").fetchall()
+        rows = db.execute(
+            "SELECT * FROM class_sessions ORDER BY class_date, weekday, start_time"
+        ).fetchall()
 
         result = []
+        role = str((current_user or {}).get("role") or "").upper()
+        student_subjects = (
+            {s.lower() for s in student_subscribed_subjects(current_user)}
+            if current_user and role == "STUDENT"
+            else None
+        )
+        faculty_subjects = None
+        faculty_keys = []
+        if current_user and role == "FACULTY" and not is_generalist_user(current_user):
+            faculty_subjects = {s.lower() for s in list_subjects_for_user(current_user)}
+            faculty_keys = faculty_match_keys(current_user)
         for r in rows:
             c = dict(r)
-            # Decorate with launch url according to viewer
+            if batch and not batches_compatible(c.get("batch"), batch):
+                continue
+            if current_user and role == "STUDENT":
+                if not (
+                    batches_compatible(c.get("batch"), current_user.get("batch_id"))
+                    or (
+                        is_all_batches(c.get("batch"))
+                        and (c.get("subject") or "").strip().lower() in (student_subjects or set())
+                    )
+                ):
+                    continue
+            elif faculty_subjects is not None:
+                faculty_name = (c.get("faculty_name") or "").strip().lower()
+                subject_name = (c.get("subject") or "").strip().lower()
+                named = any(key in faculty_name or faculty_name == key for key in faculty_keys)
+                mapped = any(subject_name == allowed or allowed in subject_name or subject_name in allowed for allowed in faculty_subjects)
+                if not named and not mapped:
+                    continue
             if c.get("google_meet_url"):
                 c["launch_info"] = build_meeting_launch_url(c["google_meet_url"], current_user)
             result.append(c)
@@ -641,11 +668,11 @@ def create_sudden_class(payload: dict, background_tasks: BackgroundTasks):
 def list_ingested_subjects(
     current_user: Optional[dict] = Depends(get_optional_current_user),
 ):
-    """Course subjects from persisted timetable roster, scoped to the signed-in faculty."""
+    """Course subjects from persisted timetable roster, scoped to the signed-in user."""
     role = str((current_user or {}).get("role") or "").upper()
-    generalist = is_generalist_user(current_user) or not current_user or role != "FACULTY"
-    query_user = current_user or {}
-    if generalist:
+    generalist = is_generalist_user(current_user) or role in {"ADMIN", "GENERALIST", "TEST"}
+    query_user = current_user or {"role": "GENERALIST"}
+    if generalist and role != "STUDENT":
         query_user = {**query_user, "role": "GENERALIST"}
     subjects = list_subjects_for_user(query_user)
     return {
@@ -662,17 +689,26 @@ def list_batches_for_ingested_subject(
     current_user: Optional[dict] = Depends(get_optional_current_user),
 ):
     """Batches linked to a course subject in the ingested timetable roster."""
+    if not (subject or "").strip():
+        return {"subject": subject, "batches": []}
     role = str((current_user or {}).get("role") or "").upper()
     query_user = current_user or {}
-    if is_generalist_user(current_user) or not current_user or role != "FACULTY":
+    if is_generalist_user(current_user) or role in {"ADMIN", "GENERALIST", "TEST"}:
         query_user = {**query_user, "role": "GENERALIST"}
     batches = list_batches_for_subject(query_user, subject)
     return {"subject": subject, "batches": batches}
 
 
 @app.get("/api/roster/status")
-def get_roster_status():
-    return roster_status()
+def get_roster_status(
+    current_user: Optional[dict] = Depends(get_optional_current_user),
+):
+    status = roster_status()
+    if current_user:
+        status["viewer_batch"] = current_user.get("batch_id")
+        status["viewer_name"] = current_user.get("name")
+        status["viewer_email"] = current_user.get("email")
+    return status
 
 
 @app.post("/api/timetables/upload")
@@ -690,11 +726,13 @@ async def upload_timetable(
         shutil.copyfileobj(file.file, destination)
 
     parsed = parse_timetable(path)
-    if not parsed:
-        raise HTTPException(400, "No valid lecture entries detected in timetable.")
+    students = parse_student_roster(path)
+    if not parsed and not students:
+        raise HTTPException(400, "No valid lecture entries or student roster rows detected.")
 
     stamp = now()
     with connect() as db:
+        students_saved = persist_student_roster(db, students, stamp) if students else 0
         timetable = db.execute(
             "INSERT INTO timetables(filename, schedule_type, effective_date, uploaded_at) VALUES(?,?,?,?)",
             (file.filename, schedule_type, effective_date, stamp),
@@ -736,10 +774,13 @@ async def upload_timetable(
         "classes_detected": len(parsed),
         "sessions_added": added,
         "sessions_existing": skipped,
+        "students_saved": students_saved,
         "persisted": True,
         "message": (
-            f"Stored {added} new class sessions in the database"
-            + (f" ({skipped} already persisted)." if skipped else ".")
+            f"Stored {added} new class sessions"
+            + (f" and {students_saved} students" if students_saved else "")
+            + " in the database"
+            + (f" ({skipped} sessions already persisted)." if skipped else ".")
         ),
     }
 
@@ -807,6 +848,7 @@ async def upload_lecture_notes(
 def list_lecture_notes(
     subject: Optional[str] = None,
     specialization: Optional[str] = None,
+    current_user: Optional[dict] = Depends(get_optional_current_user),
 ):
     with connect() as db:
         sql = "SELECT * FROM lecture_notes WHERE 1=1"
@@ -814,12 +856,24 @@ def list_lecture_notes(
         if subject:
             sql += " AND subject = ?"
             params.append(subject)
-        if specialization:
+        if specialization and not is_all_batches(specialization):
             sql += " AND specialization = ?"
             params.append(specialization)
         sql += " ORDER BY id DESC"
         rows = db.execute(sql, params).fetchall()
-        return [dict(r) for r in rows]
+        notes = [dict(r) for r in rows]
+    role = str((current_user or {}).get("role") or "").upper()
+    if current_user and role == "STUDENT":
+        notes = [note for note in notes if note_visible_to_student(note, current_user)]
+    elif current_user and role == "FACULTY" and not is_generalist_user(current_user):
+        allowed = {s.lower() for s in list_subjects_for_user(current_user)}
+        notes = [
+            note
+            for note in notes
+            if not allowed or (note.get("subject") or "").strip().lower() in allowed
+            or any(item in (note.get("subject") or "").lower() for item in allowed)
+        ]
+    return notes
 
 
 @app.get("/api/notes/{note_id}/file")
@@ -866,26 +920,34 @@ def list_assignments(
     filter_batch = batch
     user_role = str(current_user.get("role", "")).upper() if current_user else None
 
-    # If student, enforce batch filtering
-    if user_role == "STUDENT" and current_user:
-        filter_batch = current_user.get("batch_id")
-
     with connect() as db:
-        if filter_batch:
-            rows = db.execute(
-                """SELECT * FROM assignments
-                   WHERE batch_id = ? OR ? LIKE '%' || batch_id || '%'
-                   ORDER BY deadline ASC""",
-                (filter_batch, filter_batch),
-            ).fetchall()
-        else:
-            rows = db.execute("SELECT * FROM assignments ORDER BY deadline ASC").fetchall()
+        rows = db.execute("SELECT * FROM assignments ORDER BY deadline ASC").fetchall()
 
         assignments = []
         student_id = str(current_user.get("id")) if current_user and user_role == "STUDENT" else None
+        faculty_subjects = (
+            {s.lower() for s in list_subjects_for_user(current_user)}
+            if current_user and user_role == "FACULTY" and not is_generalist_user(current_user)
+            else None
+        )
 
         for r in rows:
             item = dict(r)
+            if user_role == "STUDENT" and current_user:
+                if not assignment_visible_to_student(item, current_user):
+                    continue
+            elif filter_batch and not batches_compatible(item.get("batch_id"), filter_batch):
+                continue
+            elif faculty_subjects is not None:
+                subject_name = (item.get("subject") or "").strip().lower()
+                faculty_id = current_user.get("id") if current_user else None
+                owns = faculty_id is not None and str(item.get("faculty_id")) == str(faculty_id)
+                mapped = any(
+                    subject_name == allowed or allowed in subject_name or subject_name in allowed
+                    for allowed in faculty_subjects
+                )
+                if not owns and not mapped:
+                    continue
             a_id = item["id"]
             # Submission counts
             sub_count = db.execute(
@@ -893,14 +955,21 @@ def list_assignments(
                 (a_id,),
             ).fetchone()[0]
 
-            # Total batch students
-            total_students = db.execute(
-                """SELECT count(DISTINCT s.id) FROM students s
-                   WHERE s.batch_id = ? OR ? LIKE '%' || s.batch_id || '%'""",
-                (item["batch_id"], item["batch_id"]),
-            ).fetchone()[0]
-            if total_students == 0:
-                total_students = 42  # default batch size display
+            target_batch = item.get("batch_id")
+            if is_all_batches(target_batch):
+                total_students = db.execute(
+                    "SELECT count(DISTINCT id) FROM students WHERE active = 1"
+                ).fetchone()[0]
+            else:
+                students = [
+                    dict(s)
+                    for s in db.execute(
+                        "SELECT id, batch_id FROM students WHERE active = 1"
+                    ).fetchall()
+                ]
+                total_students = sum(
+                    1 for s in students if batches_compatible(s.get("batch_id"), target_batch)
+                )
 
             item["submission_count"] = sub_count
             item["total_students"] = total_students
@@ -1220,61 +1289,69 @@ def get_student_attendance(
     """
     with connect() as db:
         student = db.execute("SELECT * FROM students WHERE id = ?", (student_id,)).fetchone()
+        if not student and current_user and current_user.get("email"):
+            student = db.execute(
+                "SELECT * FROM students WHERE LOWER(email) = LOWER(?)",
+                (current_user["email"],),
+            ).fetchone()
         batch_id = student["batch_id"] if student else None
-        if not batch_id and current_user and str(current_user.get("id")) == str(student_id):
+        if not batch_id and current_user:
             batch_id = current_user.get("batch_id")
-        if not batch_id:
-            batch_id = "CS-2A"
 
-        sessions = db.execute(
-            """SELECT id, subject, batch FROM class_sessions
-               WHERE batch = ? OR ? LIKE '%' || batch || '%' OR batch IS NULL""",
-            (batch_id, batch_id),
-        ).fetchall()
+        scope_user = dict(current_user or {})
+        if student:
+            scope_user.update(
+                {
+                    "id": student["id"],
+                    "batch_id": batch_id or student["batch_id"],
+                    "role": "STUDENT",
+                    "name": student["name"],
+                    "email": student["email"],
+                }
+            )
+        else:
+            scope_user.setdefault("role", "STUDENT")
+            scope_user.setdefault("batch_id", batch_id)
 
+        all_sessions = [dict(r) for r in db.execute("SELECT id, subject, batch FROM class_sessions").fetchall()]
+        sessions = [s for s in all_sessions if session_visible_to_user(s, scope_user)]
+
+        lookup_ids = {str(student_id)}
+        if student:
+            lookup_ids.add(str(student["id"]))
+        placeholders = ",".join("?" for _ in lookup_ids)
         records = db.execute(
-            "SELECT * FROM attendance_records WHERE student_id = ?",
-            (student_id,),
+            f"SELECT * FROM attendance_records WHERE student_id IN ({placeholders})",
+            tuple(lookup_ids),
         ).fetchall()
         record_map = {r["class_id"]: dict(r) for r in records}
 
-        curriculum_defaults = {
-            "Data Structures": {"baseline_held": 18, "baseline_attended": 16},
-            "Algorithms": {"baseline_held": 15, "baseline_attended": 13},
-            "Database Systems": {"baseline_held": 16, "baseline_attended": 14},
-            "Computer Networks": {"baseline_held": 14, "baseline_attended": 11},
-            "Operating Systems": {"baseline_held": 12, "baseline_attended": 9},
-        }
-
         subject_map = {}
-        for subj, base in curriculum_defaults.items():
-            subject_map[subj] = {
-                "attended": base["baseline_attended"],
-                "total": base["baseline_held"],
-                "live_sessions": 0,
-            }
 
         for s in sessions:
             s_dict = dict(s)
-            raw = s_dict.get("subject", "General")
-            clean_name = raw.split(" CS-")[0].split(" CS")[0].strip()
+            clean_name = _clean_subject_name(s_dict.get("subject", "General"))
             if clean_name not in subject_map:
-                subject_map[clean_name] = {"attended": 10, "total": 12, "live_sessions": 0}
+                subject_map[clean_name] = {"attended": 0, "total": 0, "live_sessions": 0}
 
             subject_map[clean_name]["live_sessions"] += 1
             subject_map[clean_name]["total"] += 1
-            rec = record_map.get(s_dict["id"])
+            rec = record_map.get(s_dict["id"]) or record_map.get(str(s_dict["id"]))
             if rec and rec.get("status") in ("Present", "Late"):
                 subject_map[clean_name]["attended"] += 1
 
         for r in records:
             r_dict = dict(r)
-            raw = r_dict.get("subject", "General")
-            clean_name = raw.split(" CS-")[0].split(" CS")[0].strip()
+            class_id = r_dict.get("class_id")
+            if any(s.get("id") == class_id or str(s.get("id")) == str(class_id) for s in sessions):
+                continue
+            clean_name = _clean_subject_name(r_dict.get("subject", "General"))
             if clean_name not in subject_map:
-                subject_map[clean_name] = {"attended": 0, "total": 1, "live_sessions": 1}
-                if r_dict.get("status") in ("Present", "Late"):
-                    subject_map[clean_name]["attended"] += 1
+                subject_map[clean_name] = {"attended": 0, "total": 0, "live_sessions": 0}
+            subject_map[clean_name]["live_sessions"] += 1
+            subject_map[clean_name]["total"] += 1
+            if r_dict.get("status") in ("Present", "Late"):
+                subject_map[clean_name]["attended"] += 1
 
         subjects_out = []
         tot_att = 0
@@ -1517,6 +1594,8 @@ def faculty_attendance_summary(
     """
     with connect() as db:
         sessions = [dict(r) for r in db.execute("SELECT * FROM class_sessions").fetchall()]
+        if current_user:
+            sessions = [s for s in sessions if session_visible_to_user(s, current_user)]
         students = [
             dict(r)
             for r in db.execute(
@@ -1540,16 +1619,10 @@ def faculty_attendance_summary(
         records_by_class.setdefault(key, []).append(rec)
 
     def enrolled_for_batch(batch: Optional[str]) -> list:
-        if not batch:
+        if is_all_batches(batch):
             return students
-        matched = [
-            s
-            for s in students
-            if s.get("batch_id") == batch
-            or (s.get("batch_id") and str(batch).find(str(s.get("batch_id"))) >= 0)
-            or (s.get("batch_id") and str(s.get("batch_id")).find(str(batch)) >= 0)
-        ]
-        return matched or students
+        matched = [s for s in students if batches_compatible(s.get("batch_id"), batch)]
+        return matched
 
     grouped: dict = {}
     for session in sessions:
@@ -1604,12 +1677,51 @@ def faculty_attendance_summary(
         else 0.0
     )
 
+    today = datetime.now(TIMEZONE).strftime("%Y-%m-%d")
+    weekday = datetime.now(TIMEZONE).strftime("%A")
+    today_sessions = [
+        s
+        for s in sessions
+        if (s.get("class_date") or "") == today or (not s.get("class_date") and (s.get("weekday") or "") == weekday)
+    ]
+    batch_overview = []
+    for batch_row in listed_roster_batches():
+        name = batch_row["name"]
+        enrolled = enrolled_for_batch(name)
+        present = 0
+        for session in today_sessions:
+            if not batches_compatible(session.get("batch"), name):
+                continue
+            class_id = session.get("id")
+            class_records = records_by_class.get(class_id) or records_by_class.get(str(class_id)) or []
+            present += sum(1 for r in class_records if r.get("status") in ("Present", "Late"))
+        enrolled_n = len(enrolled)
+        pct = round((present / enrolled_n) * 100, 1) if enrolled_n else 0.0
+        batch_overview.append(
+            {
+                "name": name,
+                "subject": batch_row.get("subject") or "",
+                "learner_count": enrolled_n or batch_row.get("learner_count") or 0,
+                "present_today": present,
+                "percentage": pct,
+            }
+        )
+
+    today_enrolled = sum(item["learner_count"] for item in batch_overview) if batch_overview else len(students)
+    today_present = sum(item["present_today"] for item in batch_overview)
+
     return {
         "total_classes_conducted": total_classes,
         "overall_average_percentage": overall_avg,
         "subject_count": len(subjects_out),
         "generated_at": now(),
         "subjects": subjects_out,
+        "batch_overview": batch_overview,
+        "today": {
+            "present": today_present,
+            "enrolled": today_enrolled,
+            "percentage": round((today_present / today_enrolled) * 100, 1) if today_enrolled else 0.0,
+        },
     }
 
 
@@ -1632,20 +1744,7 @@ def trigger_reminders():
 
 @app.get("/api/batches")
 def get_batches():
-    with connect() as db:
-        rows = db.execute(
-            """SELECT batch_id as name, count(*) as learner_count
-               FROM students
-               WHERE active = 1 AND batch_id IS NOT NULL
-               GROUP BY batch_id"""
-        ).fetchall()
-        batches = [dict(r) for r in rows]
-        if not batches:
-            batches = [
-                {"name": "CS-2A", "learner_count": 42, "subject": "Data Structures"},
-                {"name": "CS-1B", "learner_count": 36, "subject": "Algorithms"},
-            ]
-        return batches
+    return listed_roster_batches()
 
 
 @app.get("/api/people")

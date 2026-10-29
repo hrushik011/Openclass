@@ -78,7 +78,8 @@ def get_current_user(credentials: Optional[HTTPAuthorizationCredentials] = Depen
     with connect() as db:
         user = db.execute("SELECT * FROM users WHERE email = ?", (email,)).fetchone()
         if user:
-            return dict(user)
+            from .services.roster import apply_ingested_student_profile
+            return apply_ingested_student_profile(db, dict(user))
 
         # Fallback to students or faculty
         student = db.execute("SELECT * FROM students WHERE email = ?", (email,)).fetchone()
@@ -157,10 +158,15 @@ def authenticate_user(email: str, password: str, expected_role: Optional[str] = 
                     batch = None
                     phone = faculty["phone"] or ""
                 else:
-                    # If this is a login with a new college account, auto-provision
+                    from .services.roster import find_ingested_student
                     user_name = email.split("@")[0].replace(".", " ").title()
                     user_role = (expected_role or "STUDENT").upper()
-                    batch = "CS-2A" if user_role == "STUDENT" else None
+                    roster_student = find_ingested_student(db, email=email, name=user_name)
+                    if roster_student:
+                        user_name = roster_student.get("name") or user_name
+                        batch = roster_student.get("batch_id") if user_role == "STUDENT" else None
+                    else:
+                        batch = None
                     phone = ""
 
             stamp = now()
@@ -174,6 +180,8 @@ def authenticate_user(email: str, password: str, expected_role: Optional[str] = 
             user = db.execute("SELECT * FROM users WHERE LOWER(email) = ?", (email,)).fetchone()
 
         user_dict = dict(user)
+        from .services.roster import apply_ingested_student_profile
+        user_dict = apply_ingested_student_profile(db, user_dict)
 
         # Enforce role matching tab if specified
         if expected_role and user_dict["role"].upper() != expected_role.upper():
@@ -223,6 +231,11 @@ def verify_and_provision_ms_user(
 
     stamp = now()
     with connect() as db:
+        from .services.roster import find_ingested_student
+        roster_student = find_ingested_student(db, email=email, name=name) if role == "STUDENT" else None
+        if roster_student:
+            name = roster_student.get("name") or name
+            batch_id = batch_id or roster_student.get("batch_id")
         existing = db.execute("SELECT * FROM users WHERE LOWER(email) = ?", (email,)).fetchone()
         if existing:
             db.execute(
@@ -233,7 +246,7 @@ def verify_and_provision_ms_user(
         else:
             cursor = db.execute(
                 "INSERT INTO users (email, name, role, batch_id, phone, active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 1, ?, ?)",
-                (email, name, role, batch_id or ("CS-2A" if role == "STUDENT" else None), phone, stamp, stamp),
+                (email, name, role, batch_id, phone, stamp, stamp),
             )
             user_id = cursor.lastrowid
 
@@ -248,7 +261,7 @@ def verify_and_provision_ms_user(
             else:
                 db.execute(
                     "INSERT INTO students (id, name, email, phone, batch_id, active, updated_at) VALUES (?, ?, ?, ?, ?, 1, ?)",
-                    (str(user_id), name, email, phone, batch_id or "CS-2A", stamp),
+                    (str(user_id), name, email, phone, batch_id, stamp),
                 )
         elif role == "FACULTY":
             existing_fac = db.execute("SELECT id FROM faculty WHERE LOWER(email) = ?", (email,)).fetchone()
@@ -267,6 +280,8 @@ def verify_and_provision_ms_user(
 
         row = db.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
         user_dict = dict(row)
+        from .services.roster import apply_ingested_student_profile
+        user_dict = apply_ingested_student_profile(db, user_dict)
 
     token_payload = {
         "sub": str(user_dict["id"]),
