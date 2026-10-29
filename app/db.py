@@ -55,6 +55,14 @@ CREATE TABLE IF NOT EXISTS batch_allocations (
     UNIQUE(roll_no, subject, batch)
 );
 
+CREATE TABLE IF NOT EXISTS faculty_subject_batches (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    faculty_name TEXT NOT NULL,
+    subject TEXT NOT NULL,
+    batch TEXT NOT NULL,
+    UNIQUE(faculty_name, subject, batch)
+);
+
 CREATE TABLE IF NOT EXISTS google_credentials (
     id INTEGER PRIMARY KEY,
     credentials_json TEXT NOT NULL,

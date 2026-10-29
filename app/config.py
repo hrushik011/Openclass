@@ -33,8 +33,20 @@ MEET_CREATION_ALLOWED = os.getenv("MEET_CREATION_ALLOWED", "true").lower() in ("
 # Microsoft Entra ID (MS Office 365 OAuth)
 MS_CLIENT_ID = os.getenv("MS_CLIENT_ID", "")
 MS_CLIENT_SECRET = os.getenv("MS_CLIENT_SECRET", "")
-MS_TENANT_ID = os.getenv("MS_TENANT_ID", "common")
+AZURE_TENANT_ID = (os.getenv("AZURE_TENANT_ID") or "").strip()
+_MS_TENANT_RAW = (os.getenv("MS_TENANT_ID") or "").strip()
+# Prefer AZURE_TENANT_ID so authorize/token never fall back to /common when a tenant is set.
+MS_TENANT_ID = AZURE_TENANT_ID or _MS_TENANT_RAW or "common"
 MS_REDIRECT_URI = os.getenv("MS_REDIRECT_URI", "http://localhost:8000/auth/microsoft/callback")
+
+
+def microsoft_oauth_tenant() -> str:
+    """Tenant segment for login.microsoftonline.com/{tenant}/oauth2/v2.0/*."""
+    azure = (os.getenv("AZURE_TENANT_ID") or "").strip()
+    if azure:
+        return azure
+    ms_tenant = (os.getenv("MS_TENANT_ID") or "").strip()
+    return ms_tenant or "common"
 
 # Email / SMTP Settings & Allowlist
 EMAIL_DELIVERY_ALLOWED = os.getenv("EMAIL_DELIVERY_ALLOWED", "false").lower() in ("true", "1", "yes")

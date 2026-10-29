@@ -50,9 +50,9 @@ from .config import (
     MS_CLIENT_ID,
     MS_CLIENT_SECRET,
     MS_REDIRECT_URI,
-    MS_TENANT_ID,
     TEST_RECIPIENT_ALLOWLIST,
     UPLOAD_DIR,
+    microsoft_oauth_tenant,
 )
 from .db import connect, initialize, now
 from .gmail_sender import send_email
@@ -64,6 +64,14 @@ from .services.assignment import (
 )
 from .services.notification import NotificationService
 from .services.reminders import check_and_send_assignment_reminders
+from .services.roster import (
+    is_generalist_user,
+    list_batches_for_subject,
+    list_subjects_for_user,
+    rebuild_faculty_subject_batches,
+    roster_status,
+    _session_exists,
+)
 from .timetable_parser import parse_timetable
 
 
@@ -103,7 +111,7 @@ def ms_authorization_url(state: str, role: str = "STUDENT") -> str:
         "state": f"{state}:{role}",  # encode role in state
         "prompt": "select_account",
     }
-    tenant = MS_TENANT_ID or "common"
+    tenant = microsoft_oauth_tenant()
     base = f"https://login.microsoftonline.com/{tenant}/oauth2/v2.0/authorize"
     return f"{base}?{urllib.parse.urlencode(params)}"
 
@@ -113,7 +121,7 @@ def ms_exchange_code(code: str) -> dict:
     import base64
     import requests as req
 
-    tenant = MS_TENANT_ID or "common"
+    tenant = microsoft_oauth_tenant()
     token_url = f"https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token"
     resp = req.post(
         token_url,
@@ -184,6 +192,12 @@ def get_batch_student_recipients(batch_id: str) -> list[dict]:
         return [dict(r) for r in rows if r["email"]]
 
 
+def recipients_for_subject_batch(subject: str, batch_id: Optional[str] = None) -> list[dict]:
+    if not batch_id or str(batch_id).strip().lower() in {"all batches", "all", "*"}:
+        return get_notes_student_recipients(subject)
+    return get_batch_student_recipients(str(batch_id).strip())
+
+
 def get_notes_student_recipients(subject: str, specialization: Optional[str] = None) -> list[dict]:
     """Students enrolled in a subject/specialization across all batches."""
     if not subject:
@@ -197,7 +211,7 @@ def get_notes_student_recipients(subject: str, specialization: Optional[str] = N
               AND (b.subject = ? OR b.subject LIKE '%' || ? || '%')
         """
         params: list = [subject, subject]
-        if specialization:
+        if specialization and str(specialization).strip().lower() not in {"all batches", "all", "*"}:
             sql += """
               AND (
                 b.batch = ?
@@ -254,6 +268,10 @@ def meeting_for(session_id: int) -> dict:
 def startup():
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     initialize()
+    try:
+        rebuild_faculty_subject_batches()
+    except Exception as exc:
+        logger.warning("Could not rebuild faculty subject roster: %s", exc)
     try:
         scheduler.start()
         # Schedule assignment reminder job every 2 hours
@@ -378,7 +396,7 @@ def microsoft_start(request: Request, role: str = "STUDENT"):
             400,
             detail=(
                 "Microsoft SSO is not yet configured. "
-                "Add MS_CLIENT_ID, MS_CLIENT_SECRET, and MS_TENANT_ID to your .env file. "
+                "Add MS_CLIENT_ID, MS_CLIENT_SECRET, and AZURE_TENANT_ID to your .env file. "
                 "See .env.example for reference."
             ),
         )
@@ -459,7 +477,7 @@ def ms_sso_status():
     """Returns whether Microsoft SSO is fully configured with real Azure AD credentials."""
     return {
         "configured": MS_CONFIGURED,
-        "tenant_id": MS_TENANT_ID if MS_CONFIGURED else None,
+        "tenant_id": microsoft_oauth_tenant() if MS_CONFIGURED else None,
         "start_url": "/auth/microsoft/start",
     }
 
@@ -588,7 +606,7 @@ def create_sudden_class(payload: dict, background_tasks: BackgroundTasks):
         session_id = cursor.lastrowid
 
     # Background email blast
-    recipients = get_batch_student_recipients(batch)
+    recipients = recipients_for_subject_batch(payload.get("subject"), batch)
     if payload.get("faculty_email"):
         recipients.append({"email": payload.get("faculty_email"), "name": faculty_name})
 
@@ -623,22 +641,38 @@ def create_sudden_class(payload: dict, background_tasks: BackgroundTasks):
 def list_ingested_subjects(
     current_user: Optional[dict] = Depends(get_optional_current_user),
 ):
-    """Distinct course subjects from ingested timetable class sessions."""
-    with connect() as db:
-        rows = db.execute(
-            """SELECT DISTINCT subject FROM class_sessions
-               WHERE subject IS NOT NULL AND TRIM(subject) != ''
-               ORDER BY subject COLLATE NOCASE"""
-        ).fetchall()
-    seen = set()
-    subjects = []
-    for row in rows:
-        name = _clean_subject_name(dict(row).get("subject"))
-        key = name.lower()
-        if name and key not in seen:
-            seen.add(key)
-            subjects.append(name)
-    return {"subjects": subjects}
+    """Course subjects from persisted timetable roster, scoped to the signed-in faculty."""
+    role = str((current_user or {}).get("role") or "").upper()
+    generalist = is_generalist_user(current_user) or not current_user or role != "FACULTY"
+    query_user = current_user or {}
+    if generalist:
+        query_user = {**query_user, "role": "GENERALIST"}
+    subjects = list_subjects_for_user(query_user)
+    return {
+        "subjects": subjects,
+        "generalist": bool(generalist),
+        "persisted": True,
+    }
+
+
+@app.get("/api/subjects/batches")
+@app.get("/api/timetable/batches")
+def list_batches_for_ingested_subject(
+    subject: str,
+    current_user: Optional[dict] = Depends(get_optional_current_user),
+):
+    """Batches linked to a course subject in the ingested timetable roster."""
+    role = str((current_user or {}).get("role") or "").upper()
+    query_user = current_user or {}
+    if is_generalist_user(current_user) or not current_user or role != "FACULTY":
+        query_user = {**query_user, "role": "GENERALIST"}
+    batches = list_batches_for_subject(query_user, subject)
+    return {"subject": subject, "batches": batches}
+
+
+@app.get("/api/roster/status")
+def get_roster_status():
+    return roster_status()
 
 
 @app.post("/api/timetables/upload")
@@ -666,8 +700,12 @@ async def upload_timetable(
             (file.filename, schedule_type, effective_date, stamp),
         )
         tt_id = timetable.lastrowid
+        added = 0
+        skipped = 0
         for item in parsed:
-            # Generate instant Google Meet space for each session
+            if _session_exists(db, item):
+                skipped += 1
+                continue
             code = create_meeting_space(subject=item.subject)
             db.execute(
                 """INSERT INTO class_sessions(
@@ -689,12 +727,20 @@ async def upload_timetable(
                     stamp,
                 ),
             )
+            added += 1
+        rebuild_faculty_subject_batches(db)
 
     return {
         "status": "success",
         "filename": file.filename,
         "classes_detected": len(parsed),
-        "message": f"Successfully mapped {len(parsed)} class sessions with Google Meet links.",
+        "sessions_added": added,
+        "sessions_existing": skipped,
+        "persisted": True,
+        "message": (
+            f"Stored {added} new class sessions in the database"
+            + (f" ({skipped} already persisted)." if skipped else ".")
+        ),
     }
 
 
@@ -966,7 +1012,7 @@ async def create_assignment(
         assignment_file=assignment_file,
     )
 
-    target_students = get_batch_student_recipients(batch_id)
+    target_students = recipients_for_subject_batch(subject or "", batch_id)
 
     def dispatch_assignment_announcement():
         NotificationService.broadcast_assignment_created(created, target_students)

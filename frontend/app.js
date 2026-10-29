@@ -41,6 +41,7 @@
     threadComposeScope: "public",
     theme: localStorage.getItem("openclass_theme") || "light",
     subjects: [],
+    batchesBySubject: {},
     pendingTimetableFile: null
   };
 
@@ -109,11 +110,41 @@
   }
 
   function facultyNoteSubjects() {
-    const extras = [...(state.subjects || [])];
+    if ((state.subjects || []).length) {
+      return uniqueSubjectList(state.subjects);
+    }
+    const extras = [];
     (state.classes || []).forEach((item) => extras.push(cleanSubjectName(item.subject)));
     (state.assignments || []).forEach((item) => extras.push(cleanSubjectName(item.subject)));
     (state.notes || []).forEach((item) => extras.push(cleanSubjectName(item.subject)));
     return uniqueSubjectList(extras);
+  }
+
+  function escapeAttr(value) {
+    return String(value || "")
+      .replace(/&/g, "&amp;")
+      .replace(/"/g, "&quot;")
+      .replace(/</g, "&lt;");
+  }
+
+  function subjectSelectOptions(selected) {
+    const list = getClassesSubjects();
+    const placeholder = list.length ? "Select course subject..." : "No ingested subjects yet";
+    const opts = [`<option value="" ${selected ? "" : "selected"} disabled>${placeholder}</option>`];
+    list.forEach((subject) => {
+      const isSelected = selected && String(selected).toLowerCase() === String(subject).toLowerCase();
+      opts.push(`<option value="${escapeAttr(subject)}" ${isSelected ? "selected" : ""}>${escapeAttr(subject)}</option>`);
+    });
+    return opts.join("");
+  }
+
+  function batchSelectOptions(batches, selected) {
+    const list = (batches && batches.length) ? batches : ["All Batches"];
+    const preferred = selected || "All Batches";
+    return list.map((batch) => {
+      const isSelected = String(batch).toLowerCase() === String(preferred).toLowerCase();
+      return `<option value="${escapeAttr(batch)}" ${isSelected ? "selected" : ""}>${escapeAttr(batch)}</option>`;
+    }).join("");
   }
 
   // --- Microsoft OIDC JWT Handoff ---
@@ -607,6 +638,26 @@
       }
     },
 
+    async loadBatchesForSubject(subject) {
+      const key = String(subject || "").trim();
+      if (!key) return ["All Batches"];
+      if (state.batchesBySubject[key]) return state.batchesBySubject[key];
+      try {
+        const res = await fetch(`/api/subjects/batches?subject=${encodeURIComponent(key)}`, {
+          headers: api.headers()
+        });
+        if (!res.ok) return ["All Batches"];
+        const data = await res.json();
+        const batches = Array.isArray(data.batches) && data.batches.length ? data.batches : ["All Batches"];
+        if (!batches.includes("All Batches")) batches.unshift("All Batches");
+        state.batchesBySubject[key] = batches;
+        return batches;
+      } catch (e) {
+        console.warn("Could not load batches for subject", e);
+        return ["All Batches"];
+      }
+    },
+
     async uploadTimetable(file) {
       const payloadFile = file || state.pendingTimetableFile;
       if (!payloadFile) {
@@ -641,6 +692,7 @@
         showToast(`Timetable ingested: ${data.filename || payloadFile.name} · ${data.classes_detected || 0} sessions mapped.`);
         state.activeModal = null;
         state.pendingTimetableFile = null;
+        state.batchesBySubject = {};
         await api.loadDashboardData();
       } catch (e) {
         showToast(`Timetable ingest failed: ${e.message}`);
@@ -1709,15 +1761,15 @@
               <div>
                 <label class="field-label" for="note-subject">Subject</label>
                 <select id="note-subject" name="subject" class="field-input" required>
-                  ${facultyNoteSubjects().map((subject) => `
-                    <option value="${subject}" ${subject === "Data Structures" ? "selected" : ""}>${subject}</option>
-                  `).join("")}
+                  ${subjectSelectOptions("")}
                 </select>
               </div>
             </div>
             <div>
-              <label class="field-label" for="notes-specialization">Specialization <span style="opacity: 0.5;">(optional)</span></label>
-              <input id="notes-specialization" name="specialization" class="field-input" placeholder="e.g. CS-2A or AI" />
+              <label class="field-label" for="notes-specialization">Target Batch</label>
+              <select id="notes-specialization" name="specialization" class="field-input">
+                ${batchSelectOptions(["All Batches"], "All Batches")}
+              </select>
             </div>
             <div>
               <label class="field-label" for="notes-file">File attachment</label>
@@ -2575,15 +2627,14 @@
               <div>
                 <label class="field-label" for="assign-subject">Course Subject</label>
                 <select id="assign-subject" class="field-input" required>
-                  <option value="" disabled selected>${getClassesSubjects().length ? "Select ingested course subject..." : "No ingested subjects yet"}</option>
-                  ${getClassesSubjects().map((subject) => `
-                    <option value="${subject}">${subject}</option>
-                  `).join("")}
+                  ${subjectSelectOptions("")}
                 </select>
               </div>
               <div>
                 <label class="field-label" for="assign-batch">Target Batch</label>
-                <input id="assign-batch" class="field-input" required value="CS-2A" />
+                <select id="assign-batch" class="field-input" required>
+                  ${batchSelectOptions(["All Batches"], "All Batches")}
+                </select>
               </div>
             </div>
 
@@ -2648,11 +2699,15 @@
             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
               <div>
                 <label class="field-label" for="edit-subject">Course Subject</label>
-                <input id="edit-subject" class="field-input" required value="${a.subject || "Data Structures"}" />
+                <select id="edit-subject" class="field-input" required>
+                  ${subjectSelectOptions(a.subject || "")}
+                </select>
               </div>
               <div>
                 <label class="field-label" for="edit-batch">Target Batch</label>
-                <input id="edit-batch" class="field-input" required value="${a.batch_id || "CS-2A"}" />
+                <select id="edit-batch" class="field-input" required>
+                  ${batchSelectOptions(state.batchesBySubject[a.subject] || ["All Batches", a.batch_id].filter(Boolean), a.batch_id || "All Batches")}
+                </select>
               </div>
             </div>
 
@@ -2761,6 +2816,21 @@
 
             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
               <div>
+                <label class="field-label" for="sudden-subject">Course Subject</label>
+                <select id="sudden-subject" class="field-input" required>
+                  ${subjectSelectOptions("")}
+                </select>
+              </div>
+              <div>
+                <label class="field-label" for="sudden-batch">Target Batch</label>
+                <select id="sudden-batch" class="field-input" required>
+                  ${batchSelectOptions(["All Batches"], "All Batches")}
+                </select>
+              </div>
+            </div>
+
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+              <div>
                 <label class="field-label" for="sudden-date">Date</label>
                 <input id="sudden-date" class="field-input" type="date" required value="${new Date().toISOString().slice(0, 10)}" />
               </div>
@@ -2771,13 +2841,6 @@
             </div>
 
             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
-              <div>
-                <label class="field-label" for="sudden-batch">Target Batch</label>
-                <select id="sudden-batch" class="field-input">
-                  <option value="CS-2A">CS-2A (Data Structures)</option>
-                  <option value="CS-1B">CS-1B (Algorithms)</option>
-                </select>
-              </div>
               <div>
                 <label class="field-label" for="sudden-duration">Duration</label>
                 <select id="sudden-duration" class="field-input">
@@ -2882,9 +2945,6 @@
     const isFaculty = state.role === "faculty";
     const scope = state.threadComposeScope || "public";
     const subjects = facultyNoteSubjects();
-    const batches = (state.batches || []).length
-      ? state.batches
-      : [{ name: "CS-2A" }, { name: "CS-1B" }];
     const faculty = state.people || [];
     const studentBatch = (state.user && state.user.batch_id) || "CS-2A";
 
@@ -2924,20 +2984,20 @@
 
             <div id="thread-batch-fields" style="display: ${scope === "batch" ? "grid" : "none"}; gap: 10px;">
               <div>
-                <label class="field-label" for="thread-batch-input">Batch</label>
+                <label class="field-label" for="thread-subject-input">Course Subject</label>
+                <select id="thread-subject-input" class="field-input">
+                  ${subjectSelectOptions(subjects[0] || "")}
+                </select>
+              </div>
+              <div>
+                <label class="field-label" for="thread-batch-input">Target Batch</label>
                 ${isFaculty ? `
                   <select id="thread-batch-input" class="field-input">
-                    ${batches.map((b) => `<option value="${b.name}">${b.name}${b.subject ? " · " + b.subject : ""}</option>`).join("")}
+                    ${batchSelectOptions(["All Batches"], "All Batches")}
                   </select>
                 ` : `
                   <input id="thread-batch-input" class="field-input" value="${studentBatch}" readonly />
                 `}
-              </div>
-              <div>
-                <label class="field-label" for="thread-subject-input">Subject</label>
-                <select id="thread-subject-input" class="field-input">
-                  ${subjects.map((s) => `<option value="${s}">${s}</option>`).join("")}
-                </select>
               </div>
             </div>
 
@@ -3066,6 +3126,20 @@
         </div>
       </div>
     `;
+  }
+
+  function bindSubjectBatchPair(subjectId, batchId) {
+    const subjectEl = document.getElementById(subjectId);
+    const batchEl = document.getElementById(batchId);
+    if (!subjectEl || !batchEl || String(batchEl.tagName).toUpperCase() !== "SELECT") return;
+    const fillBatches = async () => {
+      const subject = subjectEl.value;
+      const previous = batchEl.value;
+      const batches = await api.loadBatchesForSubject(subject);
+      batchEl.innerHTML = batchSelectOptions(batches, previous);
+    };
+    subjectEl.addEventListener("change", fillBatches);
+    if (subjectEl.value) fillBatches();
   }
 
   // --- 10. Workspace Event Bindings ---
@@ -3237,9 +3311,10 @@
 
     // Assignment buttons
     document.querySelectorAll('[data-action="edit-assignment"]').forEach((btn) => {
-      btn.addEventListener("click", () => {
+      btn.addEventListener("click", async () => {
         const id = Number(btn.dataset.id);
         const a = state.assignments.find((item) => item.id === id);
+        await api.loadSubjects();
         state.modalData = a;
         state.activeModal = "assignment_edit";
         render();
@@ -3379,7 +3454,8 @@
     if (formSudden) {
       formSudden.addEventListener("submit", (e) => {
         e.preventDefault();
-        const subject = document.getElementById("sudden-title").value.trim();
+        const subject = (document.getElementById("sudden-subject") || {}).value
+          || document.getElementById("sudden-title").value.trim();
         const class_date = document.getElementById("sudden-date").value;
         const start_time = document.getElementById("sudden-time").value;
         const batch = document.getElementById("sudden-batch").value;
@@ -3532,6 +3608,12 @@
         });
       }
     }
+
+    bindSubjectBatchPair("assign-subject", "assign-batch");
+    bindSubjectBatchPair("edit-subject", "edit-batch");
+    bindSubjectBatchPair("note-subject", "notes-specialization");
+    bindSubjectBatchPair("sudden-subject", "sudden-batch");
+    bindSubjectBatchPair("thread-subject-input", "thread-batch-input");
   }
 
   function renderToast() {
