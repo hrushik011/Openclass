@@ -189,12 +189,15 @@ _PROGRAM_SECTION_RE = re.compile(
 
 
 def normalize_batch(batch_name: Optional[str]) -> str:
-    """Canonical batch id: All Batches → ALL, Batch 2 / B2 / Batch-2 / CS-2A → B2."""
+    """Canonical batch id: All Batches → ALL, Batch 2 / B2 / Batch-2 / B1 of 3 → B2/B1."""
     if is_all_batches(batch_name):
         return "ALL"
     text = _norm(batch_name)
     if not text:
         return ""
+    of_match = re.search(r"\b(?:batch\s*|b\s*)?(\d+)\s*(?:of|/)\s*\d+\b", text)
+    if of_match:
+        return f"B{of_match.group(1)}"
     numbered = _BATCH_NUMBER_RE.search(text)
     if numbered:
         return f"B{numbered.group(1)}"
@@ -233,6 +236,60 @@ def subjects_compatible(left: Optional[str], right: Optional[str]) -> bool:
     if not a or not b:
         return True
     return a == b or a in b or b in a
+
+
+def list_recipient_students(subject: Optional[str] = None, batch_id: Optional[str] = None) -> list[dict]:
+    """Students who should receive a subject/batch notification (enrollments + aliases)."""
+    with connect() as db:
+        students = [
+            dict(r)
+            for r in db.execute(
+                "SELECT id, name, email, batch_id FROM students WHERE active = 1"
+            ).fetchall()
+        ]
+        allocations = [
+            dict(r)
+            for r in db.execute("SELECT roll_no, subject, batch FROM batch_allocations").fetchall()
+        ]
+    by_key: dict[str, list[dict]] = {}
+    for row in allocations:
+        key = str(row.get("roll_no") or "").strip().lower()
+        if key:
+            by_key.setdefault(key, []).append(row)
+    all_batches = is_all_batches(batch_id)
+    recipients = []
+    seen = set()
+    for student in students:
+        email = (student.get("email") or "").strip().lower()
+        if not email or email in seen:
+            continue
+        keys = {str(student.get("id") or "").lower(), email}
+        enrolled = []
+        for key in keys:
+            enrolled.extend(by_key.get(key) or [])
+        matched = False
+        if enrolled:
+            for item in enrolled:
+                if subject and not subjects_compatible(subject, item.get("subject")):
+                    continue
+                if all_batches or batches_compatible(batch_id, item.get("batch") or student.get("batch_id")):
+                    matched = True
+                    break
+        elif subject and not all_batches:
+            matched = batches_compatible(batch_id, student.get("batch_id"))
+        elif not subject:
+            matched = all_batches or batches_compatible(batch_id, student.get("batch_id"))
+        if not matched:
+            continue
+        seen.add(email)
+        recipients.append(
+            {
+                "id": student.get("id"),
+                "name": student.get("name"),
+                "email": email,
+            }
+        )
+    return recipients
 
 
 def list_batches_for_subject(user: Optional[dict], subject: str) -> list[str]:
@@ -283,7 +340,7 @@ def list_batches_for_subject(user: Optional[dict], subject: str) -> list[str]:
         add_batch(dict(row).get("batch"))
     for row in alloc_rows:
         add_batch(dict(row).get("batch"))
-    # Student cohort labels (e.g. CS-2A) so faculty can target the live roster
+    # Student cohort labels from the ingested roster so faculty can target live batches
     for row in student_rows:
         add_batch(dict(row).get("batch"))
     batches.sort(key=lambda item: item.lower())

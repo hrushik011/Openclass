@@ -260,7 +260,7 @@ def seed_default_data(db: sqlite3.Connection):
         db.execute(
             """INSERT INTO faculty (full_name, email, phone, active, updated_at)
                VALUES (?, ?, ?, 1, ?)
-               ON CONFLICT(full_name) DO UPDATE SET email=excluded.email, phone=excluded.phone""",
+               ON CONFLICT(full_name) DO UPDATE SET email=excluded.email""",
             (full_name, email, phone, stamp)
         )
         db.execute(
@@ -272,24 +272,24 @@ def seed_default_data(db: sqlite3.Connection):
 
     # 2. Students
     students_data = [
-        ("std-001", "Arjun Rao", "arjun.rao@college.edu", "+919876543220", "CS-2A"),
-        ("std-002", "Meera Shah", "meera.shah@college.edu", "+919876543221", "CS-2A"),
-        ("std-003", "Karan Verma", "karan.verma@college.edu", "+919876543222", "CS-2A"),
-        ("std-004", "Ananya Iyer", "ananya.iyer@college.edu", "+919876543223", "CS-2A"),
-        ("std-005", "Rohan Varma", "rohan.varma@college.edu", "+919876543224", "CS-1B"),
-        ("std-006", "Sneha Kapoor", "sneha.kapoor@college.edu", "+919876543225", "CS-1B"),
+        ("std-001", "Arjun Rao", "arjun.rao@college.edu", "+919876543220", "Batch 2"),
+        ("std-002", "Meera Shah", "meera.shah@college.edu", "+919876543221", "Batch 2"),
+        ("std-003", "Karan Verma", "karan.verma@college.edu", "+919876543222", "Batch 2"),
+        ("std-004", "Ananya Iyer", "ananya.iyer@college.edu", "+919876543223", "Batch 2"),
+        ("std-005", "Rohan Varma", "rohan.varma@college.edu", "+919876543224", "Batch 1"),
+        ("std-006", "Sneha Kapoor", "sneha.kapoor@college.edu", "+919876543225", "Batch 1"),
     ]
     for sid, name, email, phone, batch in students_data:
         db.execute(
             """INSERT INTO students (id, name, email, phone, batch_id, active, updated_at)
                VALUES (?, ?, ?, ?, ?, 1, ?)
-               ON CONFLICT(id) DO UPDATE SET name=excluded.name, email=excluded.email, batch_id=excluded.batch_id""",
+               ON CONFLICT(id) DO UPDATE SET name=excluded.name, email=excluded.email""",
             (sid, name, email, phone, batch, stamp)
         )
         db.execute(
             """INSERT INTO users (email, name, role, phone, batch_id, active, created_at, updated_at)
                VALUES (?, ?, 'STUDENT', ?, ?, 1, ?, ?)
-               ON CONFLICT(email) DO UPDATE SET name=excluded.name, role='STUDENT', batch_id=excluded.batch_id""",
+               ON CONFLICT(email) DO UPDATE SET name=excluded.name, role='STUDENT'""",
             (email, name, phone, batch, stamp, stamp)
         )
         # Also batch allocation
@@ -309,7 +309,7 @@ def seed_default_data(db: sqlite3.Connection):
                 faculty_name, faculty_id, duration_minutes, reminder_minutes, status,
                 google_meet_space_id, google_meet_url, created_at, updated_at
             ) VALUES (
-                ?, 'Thursday', '10:00', '11:00', 'Data Structures CS-2A', 'CS-2A',
+                ?, 'Thursday', '10:00', '11:00', 'Data Structures', 'Batch 2',
                 'Professor Iyer', 2, 60, 15, 'scheduled',
                 'spaces/ds-cs2a-lecture08', 'https://meet.google.com/dks-pqnr-kty', ?, ?
             )""",
@@ -321,7 +321,7 @@ def seed_default_data(db: sqlite3.Connection):
                 faculty_name, faculty_id, duration_minutes, reminder_minutes, status,
                 google_meet_space_id, google_meet_url, created_at, updated_at
             ) VALUES (
-                ?, 'Thursday', '13:30', '14:30', 'Study group review', 'CS-2A',
+                ?, 'Thursday', '13:30', '14:30', 'Study group review', 'Batch 2',
                 'Priya Menon', 1, 60, 15, 'scheduled',
                 'spaces/cs2a-study-group', 'https://meet.google.com/xuv-mbna-rtz', ?, ?
             )""",
@@ -333,7 +333,7 @@ def seed_default_data(db: sqlite3.Connection):
                 faculty_name, faculty_id, duration_minutes, reminder_minutes, status,
                 google_meet_space_id, google_meet_url, created_at, updated_at
             ) VALUES (
-                ?, 'Thursday', '16:00', '17:00', 'Database Systems', 'CS-2A',
+                ?, 'Thursday', '16:00', '17:00', 'Database Systems', 'Batch 2',
                 'Dr. Nandita Bose', 3, 60, 15, 'scheduled',
                 'spaces/cs2a-db-systems', 'https://meet.google.com/qwa-bgtc-vfr', ?, ?
             )""",
@@ -341,18 +341,18 @@ def seed_default_data(db: sqlite3.Connection):
         )
 
     # 4. Seed sample assignments if needed
-    assign_count = db.execute("SELECT count(*) FROM assignments WHERE batch_id='CS-2A'").fetchone()[0]
+    assign_count = db.execute("SELECT count(*) FROM assignments").fetchone()[0]
     if assign_count == 0:
         deadline_3d = (datetime.now(timezone.utc) + timedelta(days=3)).strftime("%Y-%m-%dT23:59:00Z")
         deadline_7d = (datetime.now(timezone.utc) + timedelta(days=7)).strftime("%Y-%m-%dT23:59:00Z")
         db.execute(
             """INSERT INTO assignments (title, description, subject, subject_id, batch_id, deadline, faculty_id, faculty_name, created_at, updated_at)
-               VALUES ('Assignment 3: Graph Traversal', 'Implement Breadth-First Search (BFS) and Depth-First Search (DFS) algorithms with graph cycle detection.', 'Data Structures', 'CS-201', 'CS-2A', ?, 1, 'Priya Menon', ?, ?)""",
+               VALUES ('Assignment 3: Graph Traversal', 'Implement Breadth-First Search (BFS) and Depth-First Search (DFS) algorithms with graph cycle detection.', 'Data Structures', 'CS-201', 'Batch 2', ?, 1, 'Priya Menon', ?, ?)""",
             (deadline_3d, stamp, stamp)
         )
         db.execute(
             """INSERT INTO assignments (title, description, subject, subject_id, batch_id, deadline, faculty_id, faculty_name, created_at, updated_at)
-               VALUES ('Assignment 4: Dijkstra Shortest Path', 'Construct shortest path trees using Priority Queue and Fibonacci Heap implementations.', 'Data Structures', 'CS-201', 'CS-2A', ?, 1, 'Priya Menon', ?, ?)""",
+               VALUES ('Assignment 4: Dijkstra Shortest Path', 'Construct shortest path trees using Priority Queue and Fibonacci Heap implementations.', 'Data Structures', 'CS-201', 'Batch 2', ?, 1, 'Priya Menon', ?, ?)""",
             (deadline_7d, stamp, stamp)
         )
 
@@ -374,10 +374,10 @@ def seed_default_data(db: sqlite3.Connection):
         db.execute(
             """INSERT INTO threads (title, body, scope_type, batch_id, subject, recipient_faculty_id,
                 author_id, author_name, author_role, created_at, updated_at)
-               VALUES (?, ?, 'batch', 'CS-2A', 'Data Structures', NULL, ?, ?, 'FACULTY', ?, ?)""",
+               VALUES (?, ?, 'batch', 'Batch 2', 'Data Structures', NULL, ?, ?, 'FACULTY', ?, ?)""",
             (
                 "Office hours before Assignment 3",
-                "CS-2A Data Structures: extra office hours this week. Bring graph traversal questions.",
+                "Batch 2 Data Structures: extra office hours this week. Bring graph traversal questions.",
                 "1",
                 "Priya Menon",
                 stamp,

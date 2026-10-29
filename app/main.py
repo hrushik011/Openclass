@@ -73,6 +73,7 @@ from .services.roster import (
     list_batches_for_subject,
     list_subjects_for_user,
     faculty_for_student,
+    list_recipient_students,
     listed_roster_batches,
     note_visible_to_student,
     persist_student_roster,
@@ -82,7 +83,7 @@ from .services.roster import (
     student_enrollments,
     _session_exists,
 )
-from .timetable_parser import parse_student_roster, parse_timetable
+from .timetable_parser import parse_batch_allocation, parse_student_roster, parse_timetable
 
 
 logger = logging.getLogger("openclass.main")
@@ -190,49 +191,16 @@ def saved_credentials() -> Optional[str]:
 
 
 def get_batch_student_recipients(batch_id: str) -> list[dict]:
-    if not batch_id:
-        return []
-    with connect() as db:
-        rows = db.execute(
-            """SELECT DISTINCT s.id, s.name, s.email, s.phone FROM students s
-               LEFT JOIN batch_allocations b ON s.id = b.roll_no
-               WHERE (s.batch_id = ? OR b.batch = ? OR ? LIKE '%' || s.batch_id || '%') AND s.active = 1""",
-            (batch_id, batch_id, batch_id),
-        ).fetchall()
-        return [dict(r) for r in rows if r["email"]]
+    return list_recipient_students(subject=None, batch_id=batch_id)
 
 
 def recipients_for_subject_batch(subject: str, batch_id: Optional[str] = None) -> list[dict]:
-    if not batch_id or str(batch_id).strip().lower() in {"all batches", "all", "*"}:
-        return get_notes_student_recipients(subject)
-    return get_batch_student_recipients(str(batch_id).strip())
+    return list_recipient_students(subject=subject, batch_id=batch_id)
 
 
 def get_notes_student_recipients(subject: str, specialization: Optional[str] = None) -> list[dict]:
     """Students enrolled in a subject/specialization across all batches."""
-    if not subject:
-        return []
-    with connect() as db:
-        sql = """
-            SELECT DISTINCT s.id, s.name, s.email, s.phone
-            FROM students s
-            LEFT JOIN batch_allocations b ON s.id = b.roll_no
-            WHERE s.active = 1
-              AND (b.subject = ? OR b.subject LIKE '%' || ? || '%')
-        """
-        params: list = [subject, subject]
-        if specialization and str(specialization).strip().lower() not in {"all batches", "all", "*"}:
-            sql += """
-              AND (
-                b.batch = ?
-                OR s.batch_id = ?
-                OR b.subject LIKE '%' || ? || '%'
-                OR s.batch_id LIKE '%' || ? || '%'
-              )
-            """
-            params.extend([specialization, specialization, specialization, specialization])
-        rows = db.execute(sql, params).fetchall()
-        return [dict(r) for r in rows if r["email"]]
+    return list_recipient_students(subject=subject, batch_id=specialization)
 
 
 def meeting_for(session_id: int) -> dict:
@@ -578,7 +546,7 @@ def create_sudden_class(payload: dict, background_tasks: BackgroundTasks):
         if field not in payload or not payload[field]:
             raise HTTPException(status_code=400, detail=f"'{field}' is required.")
 
-    batch = payload.get("batch") or "CS-2A"
+    batch = payload.get("batch") or "All Batches"
     faculty_name = payload.get("faculty_name") or "Priya Menon"
 
     # Generate Google Meet space
@@ -718,12 +686,15 @@ async def upload_timetable(
 
     parsed = parse_timetable(path)
     students = parse_student_roster(path)
-    if not parsed and not students:
+    allocations = parse_batch_allocation(path)
+    if not parsed and not students and not allocations:
         raise HTTPException(400, "No valid lecture entries or student roster rows detected.")
 
     stamp = now()
     with connect() as db:
         students_saved = persist_student_roster(db, students, stamp) if students else 0
+        if allocations:
+            students_saved += persist_student_roster(db, allocations, stamp)
         timetable = db.execute(
             "INSERT INTO timetables(filename, schedule_type, effective_date, uploaded_at) VALUES(?,?,?,?)",
             (file.filename, schedule_type, effective_date, stamp),
@@ -1075,12 +1046,17 @@ async def create_assignment(
     target_students = recipients_for_subject_batch(subject or "", batch_id)
 
     def dispatch_assignment_announcement():
-        NotificationService.broadcast_assignment_created(created, target_students)
+        try:
+            sent = NotificationService.broadcast_assignment_created(created, target_students)
+            logger.info("Assignment %s notified %s students", created.get("id"), sent)
+        except Exception as exc:
+            logger.exception("Assignment email dispatch failed: %s", exc)
 
     background_tasks.add_task(dispatch_assignment_announcement)
 
     created["submission_count"] = 0
-    created["total_students"] = len(target_students) or 42
+    created["total_students"] = len(target_students)
+    created["emails_queued"] = len(target_students)
     created["has_submitted"] = False
     created["has_reference_file"] = bool(created.get("reference_filename"))
     return created

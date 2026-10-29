@@ -38,7 +38,7 @@ std_user = std_login["user"]
 print("2. Student Login OK:", std_user["name"], "-", std_user["role"], "Batch:", std_user["batch_id"])
 
 # 3. Microsoft SSO
-ms_login = microsoft_sso(MicrosoftAuthRequest(email="arjun.rao@college.edu", name="Arjun Rao", role="STUDENT", batch_id="CS-2A"))
+ms_login = microsoft_sso(MicrosoftAuthRequest(email="arjun.rao@college.edu", name="Arjun Rao", role="STUDENT", batch_id="Batch 2"))
 print("3. Microsoft SSO OK:", ms_login["user"]["email"])
 
 # 4. List Classes (Student View - Filtered)
@@ -67,7 +67,7 @@ sudden = create_sudden_class(
         "subject": "Advanced Graph Traversal Workshop",
         "class_date": "2026-10-15",
         "start_time": "18:00",
-        "batch": "CS-2A",
+        "batch": "Batch 2",
         "duration_minutes": 60,
         "faculty_name": "Priya Menon",
         "faculty_email": "priya.menon@college.edu",
@@ -83,7 +83,7 @@ print("   Host Controls:", sudden["host_controls"]["sole_host"])
 new_assign = persist_new_assignment(
     title="Assignment 5: Dynamic Programming & Memoization",
     subject="Data Structures",
-    batch_id="CS-2A",
+    batch_id="Batch 2",
     deadline="2026-10-25T23:59:00Z",
     description="Solve 0/1 Knapsack and Matrix Chain Multiplication with top-down memoization.",
     faculty_id=fac_user.get("id") if fac_user else 1,
@@ -103,7 +103,7 @@ updated_assign = update_assignment(
 )
 print("8. Assignment Deadline Extended OK: New Deadline =", updated_assign["deadline"])
 
-# 9. List Assignments (Student View - filtered strictly to CS-2A)
+# 9. List Assignments (Student View - filtered to enrolled batch)
 std_assignments = list_assignments(current_user=std_user)
 print("9. Student Assignments Filtered OK: Count =", len(std_assignments))
 for a in std_assignments:

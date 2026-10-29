@@ -5,16 +5,13 @@ from openpyxl import load_workbook
 
 TIME=re.compile(r"^\s*(\d{1,2}(?::\d{2})?)\s*(?:-|–|to)\s*(\d{1,2}(?::\d{2})?)\s*$",re.IGNORECASE)
 ENTRY=re.compile(r"^\s*\d+\)\s*(.+?)\s*$")
-BATCH=re.compile(r"\s*-\s*Batch\s*(\d+)\s*$",re.IGNORECASE)
+BATCH=re.compile(r"(?:-|–)?\s*(?:Batch|B)\s*(\d+)(?:\s*of\s*\d+)?\s*$",re.IGNORECASE)
 DAYS=["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"]
 @dataclass
 class ParsedClass: weekday:str; start_time:str; end_time:str; subject:str; batch:str|None; faculty_name:str|None
 def clock(value): value=value.strip(); return value if ":" in value else f"{value}:00"
-def parse_timetable(path):
-    wb = load_workbook(path, data_only=True, read_only=True)
-    ws = wb.active
-    if ws is None:
-        return []
+
+def _parse_timetable_sheet(ws):
     classes = []
     for row in ws.iter_rows(values_only=True):
         time_col = next((i for i, v in enumerate(row[:2]) if TIME.match(str(v or '').replace('.', ':').strip())), None)
@@ -32,12 +29,10 @@ def parse_timetable(path):
                 course = entry.group(1)
                 batch = BATCH.search(course)
                 faculty = lines[i+1] if i+1 < len(lines) and not ENTRY.match(lines[i+1]) else None
-                
                 start_time = clock(match.group(1))
                 end_time = clock(match.group(2))
                 subject_name = BATCH.sub('', course).strip()
                 batch_name = f"Batch {batch.group(1)}" if batch is not None else None
-                
                 classes.append(ParsedClass(
                     weekday=day,
                     start_time=start_time,
@@ -46,6 +41,18 @@ def parse_timetable(path):
                     batch=batch_name,
                     faculty_name=faculty
                 ))
+    return classes
+
+def parse_timetable(path):
+    wb = load_workbook(path, data_only=True, read_only=True)
+    classes = []
+    for ws in wb.worksheets:
+        title = (ws.title or "").lower()
+        if any(hint in title for hint in ("student", "testng", "allocation", "learners")):
+            continue
+        classes.extend(_parse_timetable_sheet(ws))
+    if not classes and wb.active is not None:
+        classes = _parse_timetable_sheet(wb.active)
     return classes
 
 
@@ -203,3 +210,52 @@ def parse_student_roster(path) -> list[dict]:
         if preferred and ws in preferred and by_identity:
             break
     return list(by_identity.values())
+
+
+ALLOCATION_SHEET_HINTS = ("allocation", "elective", "batch alloc", "subject batch")
+
+
+def parse_batch_allocation(path) -> list[dict]:
+    """Read elective/subject batch rows from a Batch Allocation sheet."""
+    wb = load_workbook(path, data_only=True, read_only=True)
+    people = []
+    for ws in wb.worksheets:
+        title = (ws.title or "").lower()
+        if not any(hint in title for hint in ALLOCATION_SHEET_HINTS):
+            continue
+        header_map = {}
+        for row in ws.iter_rows(values_only=True):
+            cells = list(row or [])
+            if not header_map:
+                header_map = _map_student_headers(cells)
+                continue
+
+            def cell(field):
+                idx = header_map.get(field)
+                if idx is None or idx >= len(cells):
+                    return ""
+                value = cells[idx]
+                return str(value).strip() if value is not None else ""
+
+            name = cell("name")
+            email = cell("email").lower()
+            batch = cell("batch")
+            subject = cell("subject")
+            if not name and not email:
+                continue
+            enrollments = []
+            for subject_name in _split_subjects(subject):
+                enrollments.append({"subject": subject_name, "batch": batch})
+            if not enrollments and batch:
+                enrollments.append({"subject": subject, "batch": batch})
+            people.append({
+                "name": name,
+                "email": email,
+                "batch": batch,
+                "phone": "",
+                "roll_no": cell("roll_no"),
+                "sheet": ws.title,
+                "enrollments": enrollments,
+                "subject": subject,
+            })
+    return people

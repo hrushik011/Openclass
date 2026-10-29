@@ -332,12 +332,12 @@
         const isFaculty = role === "FACULTY";
         const email = isFaculty ? "priya.menon@college.edu" : "arjun.rao@college.edu";
         const name = isFaculty ? "Priya Menon" : "Arjun Rao";
-        const batch_id = isFaculty ? null : "CS-2A";
+        const batch_id = isFaculty ? null : undefined;
 
         const res = await fetch("/api/auth/microsoft", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email, name, role, batch_id })
+          body: JSON.stringify({ email, name, role, ...(batch_id ? { batch_id } : {}) })
         });
         const data = await res.json();
         if (!res.ok) {
@@ -1423,9 +1423,9 @@
             <div class="demo-title">⚡ Instant Testing Shortcuts</div>
             <div class="demo-chips">
               <button class="demo-chip" data-email="priya.menon@college.edu" data-role="FACULTY">Faculty (Priya Menon)</button>
-              <button class="demo-chip" data-email="arjun.rao@college.edu" data-role="STUDENT">Student (Arjun Rao · CS-2A)</button>
-              <button class="demo-chip" data-email="meera.shah@college.edu" data-role="STUDENT">Student (Meera Shah · CS-2A)</button>
-              <button class="demo-chip" data-email="rohan.varma@college.edu" data-role="STUDENT">Student (Rohan · CS-1B)</button>
+              <button class="demo-chip" data-email="arjun.rao@college.edu" data-role="STUDENT">Student (Arjun Rao)</button>
+              <button class="demo-chip" data-email="meera.shah@college.edu" data-role="STUDENT">Student (Meera Shah)</button>
+              <button class="demo-chip" data-email="rohan.varma@college.edu" data-role="STUDENT">Student (Rohan Varma)</button>
             </div>
           </div>
         </div>
@@ -1573,7 +1573,7 @@
               <div class="avatar">${initials}</div>
               <div class="profile-copy">
                 <div class="profile-name">${user.name || "Member"}</div>
-                <div class="profile-role">${isActualFaculty ? "Course Coordinator" : `Student · ${user.batch_id || "CS-2A"}`}</div>
+                <div class="profile-role">${isActualFaculty ? "Course Coordinator" : `Student · ${user.batch_id || "Enrolled batch"}`}</div>
               </div>
             </div>
             <button class="sidebar-signout-btn" id="btn-sidebar-signout" title="Sign out of Openclass">
@@ -1993,7 +1993,7 @@
           <div>
             <div class="eyebrow">Student Portal · Attendance</div>
             <h1 class="hero-title">My Attendance.</h1>
-            <p class="hero-copy">Live subject-wise attendance for batch ${user.batch_id || "CS-2A"}. Green is 75% or higher, yellow is 50–74%, red is below 50%.</p>
+            <p class="hero-copy">Live subject-wise attendance for ${user.batch_id ? `batch ${user.batch_id}` : "your enrolled subjects"}. Green is 75% or higher, yellow is 50–74%, red is below 50%.</p>
           </div>
         </div>
         ${renderStudentAttendanceCard()}
@@ -2092,19 +2092,42 @@
   }
 
   // --- 4. Student Dashboard ---
-  function isClassToday(session) {
-    if (!session) return false;
-    const now = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
-    const weekday = now.toLocaleDateString("en-US", { weekday: "long" });
-    const ymd = [
+  function kolkataNow() {
+    return new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
+  }
+
+  function kolkataWeekday() {
+    return kolkataNow().toLocaleDateString("en-US", { weekday: "long" });
+  }
+
+  function kolkataYmd() {
+    const now = kolkataNow();
+    return [
       now.getFullYear(),
       String(now.getMonth() + 1).padStart(2, "0"),
       String(now.getDate()).padStart(2, "0")
     ].join("-");
-    if (session.class_date) {
-      return String(session.class_date).slice(0, 10) === ymd;
-    }
-    return String(session.weekday || "").toLowerCase() === weekday.toLowerCase();
+  }
+
+  function isClassToday(session) {
+    if (!session) return false;
+    const weekday = kolkataWeekday().toLowerCase();
+    const ymd = kolkataYmd();
+    if (String(session.weekday || "").toLowerCase() === weekday) return true;
+    return Boolean(session.class_date && String(session.class_date).slice(0, 10) === ymd);
+  }
+
+  function scheduleDayRollover() {
+    if (window.__ocDayWatch) return;
+    window.__ocLastYmd = kolkataYmd();
+    window.__ocDayWatch = window.setInterval(async () => {
+      const ymd = kolkataYmd();
+      if (ymd !== window.__ocLastYmd) {
+        window.__ocLastYmd = ymd;
+        await api.loadDashboardData();
+        render();
+      }
+    }, 30000);
   }
 
   function todaysEnrolledClasses() {
@@ -2340,7 +2363,7 @@
             <h1 class="hero-title">${isFaculty ? "Assignments & Submissions." : "Your Course Assignments."}</h1>
             <p class="hero-copy">${isFaculty
         ? "Create portals, edit or extend deadlines dynamically, and inspect student submissions."
-        : `Active assignments for your enrolled batch (${state.user?.batch_id || "your batch"}), including equivalent labels such as Batch 2 / CS-2A and All Batches.`}</p>
+        : `Active assignments for your enrolled subjects and batches${state.user?.batch_id ? ` (${state.user.batch_id})` : ""}, including All Batches posts.`}</p>
           </div>
           <div>
             ${isFaculty ? `
@@ -2348,7 +2371,7 @@
                 ${getIcon("plus", 14)} Create Assignment 
               </button>
             ` : `
-              <div class="date-note">Enrolled Batch: <b>${state.user?.batch_id || "CS-2A"}</b></div>
+              <div class="date-note">Enrolled Batch: <b>${state.user?.batch_id || "From roster"}</b></div>
             `}
           </div>
         </div>
@@ -2438,17 +2461,45 @@
   }
 
   // --- 6. Timetable & Schedule View ---
+  function weeklyTimetableTimes(classes) {
+    const seen = new Set();
+    const times = [];
+    (classes || []).forEach((item) => {
+      const stamp = item.start_time || "";
+      if (!stamp || seen.has(stamp)) return;
+      seen.add(stamp);
+      times.push(stamp);
+    });
+    return times.sort((a, b) => {
+      const toMin = (value) => {
+        const parts = String(value).split(":");
+        return Number(parts[0] || 0) * 60 + Number(parts[1] || 0);
+      };
+      return toMin(a) - toMin(b);
+    });
+  }
+
   function renderTimetableView() {
     const isFaculty = state.role === "faculty";
     const classes = state.classes || [];
+    const weekDays = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+    const times = weeklyTimetableTimes(classes);
+    const todayName = kolkataWeekday();
+
+    const cellSessions = (day, time) => (classes || []).filter((item) => (
+      String(item.weekday || "").toLowerCase() === day.toLowerCase()
+      && String(item.start_time || "") === time
+    ));
 
     return `
       <div class="timetable-view">
         <div class="hero-row">
           <div>
-            <div class="eyebrow">${isFaculty ? "Faculty Control" : "Student View"} · University Timetable</div>
-            <h1 class="hero-title">Academic Schedule & Lectures.</h1>
-            <p class="hero-copy">All sessions are integrated with Google Meet spaces and strict host controls.</p>
+            <div class="eyebrow">${isFaculty ? "Faculty Control" : "My Timetable"} · Weekly grid</div>
+            <h1 class="hero-title">${isFaculty ? "Academic Schedule & Lectures." : "Your enrolled week."}</h1>
+            <p class="hero-copy">${isFaculty
+        ? "Sessions mapped from the ingested university timetable."
+        : "Only the subjects and batch slots you are enrolled in. Unenrolled papers never appear here."}</p>
           </div>
           <div>
             ${isFaculty ? `
@@ -2456,60 +2507,48 @@
                 <button class="secondary-btn" id="btn-upload-timetable-view">${getIcon("upload", 13)} Ingest .xlsx</button>
                 <button class="primary-btn" id="btn-sudden-class-view">${getIcon("plus", 13)} Sudden Class</button>
               </div>
-            ` : ""}
+            ` : `<div class="date-note">Today <b>${todayName}</b></div>`}
           </div>
         </div>
 
-        <div style="display: grid; gap: 12px; margin-top: 16px;">
-          ${classes.length > 0 ? classes.map((c) => `
-            <div class="panel" style="padding: 0; overflow: hidden; border-radius: 14px;">
-              <!-- Session header row -->
-              <div style="padding: 16px 20px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 14px;">
-                <div style="display: flex; align-items: center; gap: 16px;">
-                  <div style="background: rgba(167, 139, 250, 0.15); border: 1px solid rgba(167, 139, 250, 0.3); border-radius: 8px; padding: 8px 12px; text-align: center;">
-                    <strong style="color: #a78bfa; font-size: 13px; display: block;">${c.start_time}</strong>
-                    <span style="font-size: 9px; color: var(--oc-muted);">${c.weekday || "Thursday"}</span>
-                  </div>
-                  <div>
-                    <strong style="font-size: 13px; color: var(--oc-text); display: block;">${c.subject}</strong>
-                    <span style="font-size: 10px; color: var(--oc-muted);">Faculty: ${c.faculty_name || "Faculty Lead"} · Batch: ${c.batch || "CS-2A"}</span>
-                  </div>
-                </div>
-
-                <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
-                  <button class="meet-btn ${isFaculty ? "host-mode" : ""}" data-action="launch-meet" data-id="${c.id}">
-                    ${getIcon("video", 14)} ${isFaculty ? "Launch Google Meet (Host)" : "Join Google Meet"}
-                  </button>
-                  ${isFaculty ? `
-                    <button class="secondary-btn" style="font-size: 10px; padding: 7px 12px; gap: 6px; display: flex; align-items: center;" data-action="view-attendance" data-id="${c.id}">
-                      ${getIcon("attendance", 13)} Attendance & Logs
-                    </button>
-                  ` : ""}
-                </div>
-              </div>
-
-              ${isFaculty ? `
-              <!-- Inline attendance summary bar for faculty -->
-              <div style="border-top: 1px solid rgba(147,133,204,0.12); padding: 10px 20px; display: flex; align-items: center; gap: 16px; background: rgba(167,139,250,0.04);">
-                <span style="font-size: 10px; color: var(--oc-muted); display: flex; align-items: center; gap: 5px;">
-                  ${getIcon("people", 11)}
-                  <span>Batch ${c.batch || "CS-2A"}</span>
-                </span>
-                <span style="font-size: 10px; color: var(--oc-muted);">·</span>
-                <span style="font-size: 10px; color: #61d7da; display: flex; align-items: center; gap: 5px;">
-                  ${getIcon("attendance", 11)}
-                  Click <strong style="color: #a78bfa; margin: 0 2px;">Attendance & Logs</strong> to view or finalize the smart roster
-                </span>
-                <div style="margin-left: auto;">
-                  <a href="/api/attendance/session/${c.id}/export" class="mini-btn" download style="font-size: 9px; padding: 5px 10px; display: inline-flex; align-items: center; gap: 5px;">
-                    ${getIcon("download", 11)} Download CSV
-                  </a>
-                </div>
-              </div>
-              ` : ""}
-            </div>
-          `).join("") : `<p>No timetable entries available.</p>`}
-        </div>
+        ${classes.length ? `
+        <section class="panel" style="margin-top: 16px; overflow: auto;">
+          <table style="width: 100%; border-collapse: collapse; min-width: 720px;">
+            <thead>
+              <tr>
+                <th style="text-align: left; padding: 10px 12px; font-size: 10px; color: var(--oc-muted); width: 88px;">Time</th>
+                ${weekDays.map((day) => `
+                  <th style="text-align: left; padding: 10px 12px; font-size: 10px; color: ${day === todayName ? "#7C3AED" : "var(--oc-muted)"};">${day}${day === todayName ? " · today" : ""}</th>
+                `).join("")}
+              </tr>
+            </thead>
+            <tbody>
+              ${times.map((time) => `
+                <tr style="border-top: 1px solid rgba(147,133,204,0.12);">
+                  <td style="padding: 10px 12px; font-weight: 800; color: #a78bfa; font-variant-numeric: tabular-nums; vertical-align: top;">${time}</td>
+                  ${weekDays.map((day) => {
+                    const slots = cellSessions(day, time);
+                    return `
+                      <td style="padding: 8px 10px; vertical-align: top; background: ${day === todayName ? "rgba(124,58,237,0.04)" : "transparent"};">
+                        ${slots.length ? slots.map((c) => `
+                          <div style="margin-bottom: 8px;">
+                            <strong style="display: block; font-size: 12px; color: var(--oc-text);">${c.subject}</strong>
+                            <span style="display: block; font-size: 10px; color: var(--oc-muted);">${c.faculty_name || "Faculty"}${c.batch ? " · " + c.batch : ""}</span>
+                            <button class="meet-btn ${isFaculty ? "host-mode" : ""}" data-action="launch-meet" data-id="${c.id}" style="margin-top: 6px;">
+                              ${getIcon("video", 12)} ${isFaculty ? "Host" : "Join"}
+                            </button>
+                            ${isFaculty ? `<button class="mini-btn" data-action="view-attendance" data-id="${c.id}" style="margin-top: 4px;">Attendance</button>` : ""}
+                          </div>
+                        `).join("") : `<span style="color: var(--oc-muted); font-size: 11px;">—</span>`}
+                      </td>
+                    `;
+                  }).join("")}
+                </tr>
+              `).join("")}
+            </tbody>
+          </table>
+        </section>
+        ` : `<p style="margin-top: 16px; color: var(--oc-muted);">${isFaculty ? "No timetable entries available." : "No enrolled lectures mapped yet. Re-ingest the roster if your electives are missing."}</p>`}
       </div>
     `;
   }
@@ -3046,7 +3085,7 @@
     const scope = state.threadComposeScope || "public";
     const subjects = facultyNoteSubjects();
     const faculty = state.people || [];
-    const studentBatch = (state.user && state.user.batch_id) || "CS-2A";
+    const studentBatch = (state.user && state.user.batch_id) || "";
 
     return `
       <div class="modal-backdrop" id="modal-backdrop">
@@ -3725,6 +3764,7 @@
     bindSubjectBatchPair("note-subject", "notes-specialization");
     bindSubjectBatchPair("sudden-subject", "sudden-batch");
     bindSubjectBatchPair("thread-subject-input", "thread-batch-input");
+    scheduleDayRollover();
   }
 
   function renderToast() {
@@ -3743,5 +3783,15 @@
       await api.loadDashboardData();
     }
     render();
+    scheduleDayRollover();
+  });
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible" && state.token) {
+      const ymd = kolkataYmd();
+      if (ymd !== window.__ocLastYmd) {
+        window.__ocLastYmd = ymd;
+        api.loadDashboardData().then(() => render());
+      }
+    }
   });
 })();
