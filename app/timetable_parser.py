@@ -61,7 +61,16 @@ NAME_HEADERS = {"name", "student name", "full name", "student", "learner"}
 EMAIL_HEADERS = {"email", "e-mail", "mail", "student email"}
 BATCH_HEADERS = {"batch", "batch name", "batch id", "class", "section", "division", "group"}
 PHONE_HEADERS = {"phone", "mobile", "contact", "phone number"}
-ROLL_HEADERS = {"roll", "roll no", "roll number", "id", "student id", "enrolment", "enrollment", "prn"}
+ROLL_HEADERS = {
+    "roll", "roll no", "roll number", "id", "student id", "enrolment", "enrollment",
+    "prn", "prn no", "registration", "reg no", "regno", "imdr id", "imdr roll",
+    "sap id", "permanent registration number",
+}
+ELECTIVE_HEADER_BATCH = re.compile(
+    r"^(.*?)\s*[\(\[]\s*((?:batch\s*)?b?\s*\d+(?:\s*of\s*\d+)?)\s*[\)\]]\s*$",
+    re.IGNORECASE,
+)
+ROLL_TOKEN = re.compile(r"(imdr[\s._-]*\d{4,}[\s._-]*\d+)", re.IGNORECASE)
 SUBJECT_HEADERS = {
     "subject", "subjects", "course", "courses", "paper", "papers",
     "enrolled subject", "enrolled subjects", "enrolled course", "specialization",
@@ -89,6 +98,76 @@ def _split_subjects(raw: str) -> list[str]:
     return [part.strip() for part in parts if part.strip() and part.strip().lower() not in {"yes", "y", "no"}]
 
 
+def _looks_like_batch(value: str) -> bool:
+    return bool(re.search(r"batch|\bB\s*\d+\b|CS-\d|\bB\d+\s*of\s*\d+", str(value or ""), re.IGNORECASE))
+
+
+def parse_elective_header(title: str) -> tuple[str, str]:
+    text = str(title or "").strip()
+    match = ELECTIVE_HEADER_BATCH.match(text)
+    if match:
+        return match.group(1).strip(), match.group(2).strip()
+    match = re.match(
+        r"^(.*?)\s*[-–]\s*((?:batch\s*)?b?\s*\d+(?:\s*of\s*\d+)?)\s*$",
+        text,
+        re.IGNORECASE,
+    )
+    if match:
+        return match.group(1).strip(), match.group(2).strip()
+    return text, ""
+
+
+def _extract_roll(cells, header_map) -> str:
+    for value in cells:
+        text = str(value or "").strip()
+        match = ROLL_TOKEN.search(text)
+        if match:
+            return re.sub(r"\s+", "", match.group(1)).strip()
+    idx = header_map.get("roll_no")
+    if idx is not None and idx < len(cells) and cells[idx] is not None:
+        value = str(cells[idx]).strip()
+        if value and not value.isdigit():
+            return value
+    return ""
+
+
+def _row_enrollments(header_map: dict, cells: list, default_batch: str) -> list[dict]:
+    enrollments = []
+
+    def add_enroll(subject, enroll_batch=None):
+        header_subject, header_batch = parse_elective_header(subject)
+        subject_name = header_subject or str(subject or "").strip()
+        if not subject_name:
+            return
+        enrollments.append({
+            "subject": subject_name,
+            "batch": str(enroll_batch or header_batch or default_batch or "").strip(),
+        })
+
+    subject_cell = ""
+    idx = header_map.get("subject")
+    if idx is not None and idx < len(cells) and cells[idx] is not None:
+        subject_cell = str(cells[idx]).strip()
+    for subject_name in _split_subjects(subject_cell):
+        add_enroll(subject_name, default_batch)
+    used = header_map.get("identity_idxs") or set()
+    col_titles = header_map.get("col_titles") or {}
+    for col_idx in header_map.get("subject_cols") or []:
+        if col_idx in used or col_idx >= len(cells):
+            continue
+        value = cells[col_idx]
+        if not _truthy_enrollment(value):
+            continue
+        header_title = col_titles.get(col_idx) or ""
+        cell_text = str(value).strip()
+        _, header_batch = parse_elective_header(header_title)
+        if _looks_like_batch(cell_text) and cell_text.lower() not in {"yes", "y", "1", "true", "enrolled"}:
+            add_enroll(header_title, cell_text)
+        else:
+            add_enroll(header_title or cell_text, header_batch or default_batch)
+    return enrollments
+
+
 def _map_student_headers(cells) -> dict:
     mapping = {}
     subject_cols = []
@@ -100,6 +179,10 @@ def _map_student_headers(cells) -> dict:
         if not key:
             continue
         col_titles[idx] = title
+        _, header_batch = parse_elective_header(title)
+        if header_batch:
+            subject_cols.append(idx)
+            continue
         if key in NAME_HEADERS or (key.endswith(" name") and "father" not in key and "mother" not in key):
             mapping.setdefault("name", idx)
             identity_idxs.add(idx)
@@ -165,7 +248,7 @@ def parse_student_roster(path) -> list[dict]:
                 "email": email,
                 "batch": batch,
                 "phone": cell("phone"),
-                "roll_no": cell("roll_no"),
+                "roll_no": _extract_roll(cells, header_map),
                 "sheet": ws.title,
                 "enrollments": [],
             })
@@ -175,37 +258,9 @@ def parse_student_roster(path) -> list[dict]:
                 person["email"] = email
             if batch and not person.get("batch"):
                 person["batch"] = batch
-            enrollments = person["enrollments"]
-
-            def add_enroll(subject, enroll_batch=None):
-                subject_name = str(subject or "").strip()
-                if not subject_name:
-                    return
-                enrollments.append({
-                    "subject": subject_name,
-                    "batch": str(enroll_batch or batch or person.get("batch") or "").strip(),
-                })
-
-            for subject_name in _split_subjects(cell("subject")):
-                add_enroll(subject_name, batch)
-            used = header_map.get("identity_idxs") or set()
-            col_titles = header_map.get("col_titles") or {}
-            for idx in header_map.get("subject_cols") or []:
-                if idx in used or idx >= len(cells):
-                    continue
-                value = cells[idx]
-                if not _truthy_enrollment(value):
-                    continue
-                header_title = col_titles.get(idx) or ""
-                cell_text = str(value).strip()
-                enroll_batch = batch
-                if re.search(r"batch|\bB\s*\d+\b|CS-\d", cell_text, re.IGNORECASE):
-                    enroll_batch = cell_text
-                    add_enroll(header_title, enroll_batch)
-                elif cell_text.lower() in {"yes", "y", "1", "true", "enrolled"}:
-                    add_enroll(header_title, enroll_batch)
-                else:
-                    add_enroll(header_title or cell_text, enroll_batch)
+            if not person.get("roll_no"):
+                person["roll_no"] = _extract_roll(cells, header_map)
+            person["enrollments"].extend(_row_enrollments(header_map, cells, batch or person.get("batch") or ""))
 
         if preferred and ws in preferred and by_identity:
             break
@@ -243,17 +298,15 @@ def parse_batch_allocation(path) -> list[dict]:
             subject = cell("subject")
             if not name and not email:
                 continue
-            enrollments = []
-            for subject_name in _split_subjects(subject):
-                enrollments.append({"subject": subject_name, "batch": batch})
-            if not enrollments and batch:
+            enrollments = _row_enrollments(header_map, cells, batch)
+            if not enrollments and (subject or batch):
                 enrollments.append({"subject": subject, "batch": batch})
             people.append({
                 "name": name,
                 "email": email,
                 "batch": batch,
                 "phone": "",
-                "roll_no": cell("roll_no"),
+                "roll_no": _extract_roll(cells, header_map),
                 "sheet": ws.title,
                 "enrollments": enrollments,
                 "subject": subject,

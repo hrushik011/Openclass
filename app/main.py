@@ -81,6 +81,8 @@ from .services.roster import (
     roster_status,
     session_visible_to_user,
     student_enrollments,
+    list_student_class_sessions,
+    find_ingested_student,
     _session_exists,
 )
 from .timetable_parser import parse_batch_allocation, parse_student_roster, parse_timetable
@@ -479,9 +481,16 @@ def list_classes(
 
         result = []
         role = str((current_user or {}).get("role") or "").upper()
-        enrollments = student_enrollments(current_user) if current_user and role == "STUDENT" else None
         faculty_subjects = None
         faculty_keys = []
+        if current_user and role == "STUDENT":
+            result = list_student_class_sessions(current_user, [dict(r) for r in rows])
+            if batch:
+                result = [c for c in result if batches_compatible(c.get("batch"), batch)]
+            for c in result:
+                if c.get("google_meet_url"):
+                    c["launch_info"] = build_meeting_launch_url(c["google_meet_url"], current_user)
+            return result
         if current_user and role == "FACULTY" and not is_generalist_user(current_user):
             faculty_subjects = {s.lower() for s in list_subjects_for_user(current_user)}
             faculty_keys = faculty_match_keys(current_user)
@@ -489,10 +498,7 @@ def list_classes(
             c = dict(r)
             if batch and not batches_compatible(c.get("batch"), batch):
                 continue
-            if current_user and role == "STUDENT":
-                if not session_visible_to_user(c, current_user, enrollments):
-                    continue
-            elif faculty_subjects is not None:
+            if faculty_subjects is not None:
                 faculty_name = (c.get("faculty_name") or "").strip().lower()
                 subject_name = (c.get("subject") or "").strip().lower()
                 named = any(key in faculty_name or faculty_name == key for key in faculty_keys)
@@ -503,6 +509,61 @@ def list_classes(
                 c["launch_info"] = build_meeting_launch_url(c["google_meet_url"], current_user)
             result.append(c)
         return result
+
+
+def _sessions_with_meet_links(sessions: list[dict], current_user: Optional[dict]) -> list[dict]:
+    result = []
+    for session in sessions:
+        item = dict(session)
+        if item.get("google_meet_url"):
+            item["launch_info"] = build_meeting_launch_url(item["google_meet_url"], current_user)
+        result.append(item)
+    return result
+
+
+def _student_today_sessions(classes: list[dict]) -> list[dict]:
+    today = datetime.now(TIMEZONE).strftime("%A")
+    return [c for c in classes if str(c.get("weekday") or "").strip().lower() == today.lower()]
+
+
+@app.get("/api/student/timetable")
+def student_timetable(current_user: dict = Depends(require_student)):
+    with connect() as db:
+        rows = [dict(r) for r in db.execute(
+            "SELECT * FROM class_sessions ORDER BY class_date, weekday, start_time"
+        ).fetchall()]
+    classes = _sessions_with_meet_links(list_student_class_sessions(current_user, rows), current_user)
+    enrollments = student_enrollments(current_user)
+    return {
+        "classes": classes,
+        "enrollments": enrollments,
+        "today": _student_today_sessions(classes),
+        "student": {
+            "id": current_user.get("roster_id") or current_user.get("id"),
+            "email": current_user.get("email"),
+            "name": current_user.get("name"),
+            "batch_id": current_user.get("batch_id"),
+            "roll_no": current_user.get("roll_no") or current_user.get("roster_id"),
+        },
+    }
+
+
+@app.get("/api/student/dashboard")
+def student_dashboard(current_user: dict = Depends(require_student)):
+    timetable = student_timetable(current_user)
+    attendance = get_student_attendance(
+        student_id=str(current_user.get("roster_id") or current_user.get("id")),
+        current_user=current_user,
+    )
+    return {**timetable, "attendance": attendance}
+
+
+@app.get("/api/student/attendance")
+def student_attendance_me(current_user: dict = Depends(require_student)):
+    return get_student_attendance(
+        student_id=str(current_user.get("roster_id") or current_user.get("id")),
+        current_user=current_user,
+    )
 
 
 @app.get("/api/classes/{session_id}/meet-link")
@@ -1255,13 +1316,17 @@ def get_student_attendance(
     Calculates attended classes vs. total classes held and color-coded eligibility percentage.
     """
     with connect() as db:
-        student = db.execute("SELECT * FROM students WHERE id = ?", (student_id,)).fetchone()
-        if not student and current_user and current_user.get("email"):
-            student = db.execute(
-                "SELECT * FROM students WHERE LOWER(email) = LOWER(?)",
-                (current_user["email"],),
-            ).fetchone()
-        batch_id = student["batch_id"] if student else None
+        student = find_ingested_student(
+            db,
+            email=(current_user or {}).get("email"),
+            name=(current_user or {}).get("name"),
+            roll_no=str((current_user or {}).get("roll_no") or student_id or ""),
+            log_miss=False,
+        )
+        if student is None:
+            row = db.execute("SELECT * FROM students WHERE id = ?", (student_id,)).fetchone()
+            student = dict(row) if row else None
+        batch_id = (student or {}).get("batch_id") if student else None
         if not batch_id and current_user:
             batch_id = current_user.get("batch_id")
 
@@ -1270,10 +1335,12 @@ def get_student_attendance(
             scope_user.update(
                 {
                     "id": student["id"],
+                    "roll_no": student["id"],
+                    "roster_id": student["id"],
                     "batch_id": batch_id or student["batch_id"],
                     "role": "STUDENT",
                     "name": student["name"],
-                    "email": student["email"],
+                    "email": student.get("email") or scope_user.get("email"),
                 }
             )
         else:
@@ -1282,7 +1349,7 @@ def get_student_attendance(
 
         all_sessions = [dict(r) for r in db.execute("SELECT id, subject, batch FROM class_sessions").fetchall()]
         enrollments = student_enrollments(scope_user)
-        sessions = [s for s in all_sessions if session_visible_to_user(s, scope_user, enrollments)]
+        sessions = list_student_class_sessions(scope_user, all_sessions)
 
         lookup_ids = {str(student_id)}
         if student:

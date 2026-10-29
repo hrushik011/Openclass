@@ -416,12 +416,16 @@
     },
 
     async loadStudentAttendance() {
-      const sid = api.studentId();
-      if (!sid || !state.token) return;
+      if (!state.token) return;
       try {
-        const res = await fetch(`/api/attendance/student/${encodeURIComponent(sid)}`, {
-          headers: api.headers()
-        });
+        let res = await fetch("/api/student/attendance", { headers: api.headers() });
+        if (!res.ok) {
+          const sid = api.studentId();
+          if (!sid) return;
+          res = await fetch(`/api/attendance/student/${encodeURIComponent(sid)}`, {
+            headers: api.headers()
+          });
+        }
         if (res.ok) state.studentAttendance = await res.json();
       } catch (e) {
         console.warn("Student attendance fetch failed", e);
@@ -511,14 +515,22 @@
     async loadDashboardData() {
       if (!state.token) return;
       try {
+        const isStudent = String(state.user?.role || "").toUpperCase() === "STUDENT";
+        const classUrl = isStudent ? "/api/student/timetable" : "/api/classes";
         const [clsRes, assignRes, batchRes, peopleRes, notesRes] = await Promise.all([
-          fetch("/api/classes", { headers: api.headers() }),
+          fetch(classUrl, { headers: api.headers() }),
           fetch("/api/assignments", { headers: api.headers() }),
           fetch("/api/batches", { headers: api.headers() }),
           fetch("/api/people", { headers: api.headers() }),
           fetch("/api/notes", { headers: api.headers() })
         ]);
-        if (clsRes.ok) state.classes = await clsRes.json();
+        if (clsRes.ok) {
+          const payload = await clsRes.json();
+          state.classes = Array.isArray(payload) ? payload : (payload.classes || payload.sessions || []);
+          if (!Array.isArray(payload) && payload.attendance) {
+            state.studentAttendance = payload.attendance;
+          }
+        }
         if (assignRes.ok) state.assignments = assignmentsForViewer(await assignRes.json());
         if (batchRes.ok) state.batches = await batchRes.json();
         if (peopleRes.ok) state.people = await peopleRes.json();

@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 from typing import Optional
 
 from ..db import connect
+
+logger = logging.getLogger("openclass.roster")
 
 
 GENERALIST_NAMES = {"priya menon"}
@@ -23,12 +26,25 @@ GENERALIST_EMAILS = {
 def _clean_subject_name(raw: Optional[str]) -> str:
     if not raw:
         return ""
+    cleaned = str(raw).strip()
+    cleaned = re.sub(
+        r"\s*[\(\[]\s*(?:batch\s*)?b?\s*\d+(?:\s*of\s*\d+)?\s*[\)\]]\s*$",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+    cleaned = re.sub(
+        r"\s*[-–]\s*(?:batch\s*)?b?\s*\d+(?:\s*of\s*\d+)?\s*$",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
     cleaned = re.sub(
         r"\s+(CS-\d[A-Z0-9]*|[A-Z]{2,3}-\d[A-Z0-9]*)$",
         "",
-        str(raw).strip(),
+        cleaned,
         flags=re.IGNORECASE,
-    ).strip()
+    ).strip(" -")
     return cleaned or str(raw).strip()
 
 
@@ -352,6 +368,7 @@ def student_enrollments(user: Optional[dict]) -> list[dict]:
     if not user:
         return []
     email = (user.get("email") or "").strip().lower()
+    roll = str(user.get("roll_no") or user.get("roster_id") or user.get("id") or "").strip()
     enrollments = []
     seen = set()
     with connect() as db:
@@ -359,29 +376,45 @@ def student_enrollments(user: Optional[dict]) -> list[dict]:
             db,
             email=email,
             name=user.get("name"),
-            roll_no=str(user.get("id") or ""),
+            roll_no=roll,
+            log_miss=False,
         )
-        keys = set()
-        if linked:
-            keys.add(str(linked.get("id") or ""))
-            if linked.get("email"):
-                keys.add(str(linked["email"]).lower())
-        if user.get("id") is not None:
-            keys.add(str(user.get("id")))
-        if email:
-            keys.add(email)
-        keys = {k for k in keys if k}
+        keys = identity_keys(
+            email,
+            user.get("name"),
+            roll,
+            (linked or {}).get("id"),
+            (linked or {}).get("email"),
+            (linked or {}).get("name"),
+        )
         if not keys:
             return []
-        placeholders = ",".join("?" for _ in keys)
+        compact_keys = {compact_identity(k) for k in keys if compact_identity(k)}
         rows = db.execute(
-            f"""SELECT subject, batch FROM batch_allocations
-                WHERE roll_no IN ({placeholders}) AND TRIM(IFNULL(subject, '')) != ''""",
-            tuple(keys),
+            "SELECT roll_no, subject, batch FROM batch_allocations WHERE TRIM(IFNULL(subject, '')) != ''"
         ).fetchall()
-        fallback_batch = (linked or {}).get("batch_id") or user.get("batch_id")
+        matched_rows = []
         for row in rows:
             item = dict(row)
+            roll_value = str(item.get("roll_no") or "")
+            if roll_value in keys or roll_value.lower() in keys:
+                matched_rows.append(item)
+                continue
+            if compact_identity(roll_value) in compact_keys:
+                matched_rows.append(item)
+        if not linked and not matched_rows:
+            _log_student_lookup_miss(email, roll, user.get("name"), db)
+        if not matched_rows:
+            alloc_keys = sorted({str(dict(r).get("roll_no") or "") for r in rows})[:80]
+            message = (
+                "Student allocation query returned 0 rows for "
+                f"email={email!r} roll={roll!r} name={user.get('name')!r} "
+                f"lookup_keys={sorted(list(keys))[:40]} available_allocation_keys={alloc_keys}"
+            )
+            print(message, flush=True)
+            logger.warning(message)
+        fallback_batch = (linked or {}).get("batch_id") or user.get("batch_id")
+        for item in matched_rows:
             subject = _clean_subject_name(item.get("subject"))
             batch = str(item.get("batch") or fallback_batch or "").strip()
             if not subject:
@@ -392,6 +425,37 @@ def student_enrollments(user: Optional[dict]) -> list[dict]:
             seen.add(marker)
             enrollments.append({"subject": subject, "batch": batch})
     return enrollments
+
+
+def list_student_class_sessions(user: Optional[dict], sessions: Optional[list[dict]] = None) -> list[dict]:
+    """Return timetable rows that match this student's elective/batch allocations."""
+    enrollments = student_enrollments(user)
+    with connect() as db:
+        rows = sessions if sessions is not None else [dict(r) for r in db.execute(
+            "SELECT * FROM class_sessions ORDER BY class_date, weekday, start_time"
+        ).fetchall()]
+        all_sessions = [dict(r) if not isinstance(r, dict) else r for r in rows]
+    matched = [row for row in all_sessions if enrollment_matches_session(row, user, enrollments)]
+    if matched:
+        return matched
+    if not enrollments:
+        return []
+    # Elective rows exist: keep the weekly grid populated by matching subject even if
+    # the Excel batch label does not exactly equal the Time Table batch cell.
+    relaxed = []
+    for row in all_sessions:
+        if any(subjects_compatible(row.get("subject"), item.get("subject")) for item in enrollments):
+            relaxed.append(row)
+    if not relaxed:
+        subjects = sorted({s.get("subject") for s in all_sessions})
+        message = (
+            "Student timetable matched 0 lectures despite enrollments "
+            f"email={(user or {}).get('email')!r} enrollments={enrollments} "
+            f"available_session_subjects={subjects}"
+        )
+        print(message, flush=True)
+        logger.warning(message)
+    return relaxed
 
 
 def student_subscribed_subjects(user: Optional[dict]) -> list[str]:
@@ -417,7 +481,9 @@ def enrollment_matches_session(session: dict, user: Optional[dict], enrollments:
         if not subjects_compatible(session_subject, item.get("subject")):
             continue
         enroll_batch = item.get("batch") or student_batch
-        if batches_compatible(session_batch, enroll_batch) or is_all_batches(session_batch):
+        if not enroll_batch or not session_batch:
+            return True
+        if batches_compatible(session_batch, enroll_batch) or is_all_batches(session_batch) or is_all_batches(enroll_batch):
             return True
     return False
 
@@ -514,9 +580,88 @@ def listed_roster_batches() -> list[dict]:
     return sorted(by_name.values(), key=lambda item: str(item["name"]).lower())
 
 
+ROLL_TOKEN = re.compile(r"(imdr[\s._-]*\d{4,}[\s._-]*\d+)", re.IGNORECASE)
+
+
 def _person_name_key(value: Optional[str]) -> str:
     tokens = re.findall(r"[a-z0-9]+", _norm(value))
     return " ".join(sorted(tokens))
+
+
+def _name_tokens(value: Optional[str]) -> list[str]:
+    skip = {"mr", "ms", "mrs", "miss", "dr", "prof"}
+    return [t for t in re.findall(r"[a-z]+", _norm(value)) if t not in skip and len(t) > 1]
+
+
+def names_compatible(left: Optional[str], right: Optional[str]) -> bool:
+    a = _name_tokens(left)
+    b = _name_tokens(right)
+    if not a or not b:
+        return False
+    sa, sb = set(a), set(b)
+    if sa == sb or sa <= sb or sb <= sa:
+        return True
+    return a[-1] == b[-1] and (a[0] == b[0] or a[0][0] == b[0][0])
+
+
+def compact_identity(value: Optional[str]) -> str:
+    return re.sub(r"[^a-z0-9]", "", str(value or "").strip().lower())
+
+
+def extract_roll_token(value: Optional[str]) -> str:
+    text = str(value or "").strip()
+    match = ROLL_TOKEN.search(text)
+    if match:
+        return re.sub(r"[^A-Z0-9]", "", match.group(1).upper())
+    compact = compact_identity(text)
+    if compact.startswith("imdr") and len(compact) >= 10:
+        return compact.upper()
+    return ""
+
+
+def identity_keys(*values: Optional[str]) -> set[str]:
+    keys: set[str] = set()
+    for raw in values:
+        text = str(raw or "").strip()
+        if not text or text.lower() in {"none", "null"}:
+            continue
+        keys.add(text)
+        keys.add(text.lower())
+        local = text.split("@")[0].strip()
+        if local:
+            keys.add(local)
+            keys.add(local.lower())
+        compact = compact_identity(text)
+        if compact:
+            keys.add(compact)
+        roll = extract_roll_token(text)
+        if roll:
+            keys.add(roll)
+            keys.add(roll.lower())
+            if len(roll) > 4:
+                keys.add(f"{roll[:-3]}-{roll[-3:]}")
+    return {k for k in keys if k and len(k) > 1}
+
+
+def _row_identity_keys(row: dict) -> set[str]:
+    return identity_keys(row.get("id"), row.get("email"), row.get("name"), row.get("roll_no"))
+
+
+def _log_student_lookup_miss(email: Optional[str], roll: Optional[str], name: Optional[str], db) -> None:
+    students = [dict(r) for r in db.execute("SELECT id, email, name FROM students WHERE active = 1").fetchall()]
+    alloc_keys = [
+        str(r["roll_no"])
+        for r in db.execute("SELECT DISTINCT roll_no FROM batch_allocations LIMIT 80").fetchall()
+    ]
+    message = (
+        "Student lookup returned 0 rows for "
+        f"email={email!r} roll={roll!r} name={name!r}. "
+        f"Available student ids={[s.get('id') for s in students[:50]]} "
+        f"emails={[s.get('email') for s in students[:50]]} "
+        f"allocation_keys={alloc_keys}"
+    )
+    print(message, flush=True)
+    logger.warning(message)
 
 
 def find_ingested_student(
@@ -524,31 +669,35 @@ def find_ingested_student(
     email: Optional[str] = None,
     name: Optional[str] = None,
     roll_no: Optional[str] = None,
+    log_miss: bool = False,
 ) -> Optional[dict]:
+    lookup_keys = identity_keys(email, name, roll_no)
     email_n = (email or "").strip().lower()
-    if email_n:
-        row = db.execute(
-            "SELECT * FROM students WHERE LOWER(email) = ? AND active = 1",
-            (email_n,),
-        ).fetchone()
-        if row:
-            return dict(row)
+    email_local = email_n.split("@")[0] if email_n else ""
     roll = str(roll_no or "").strip()
-    if roll:
-        row = db.execute(
-            "SELECT * FROM students WHERE id = ? AND active = 1",
-            (roll,),
-        ).fetchone()
-        if row:
-            return dict(row)
-    target = _person_name_key(name)
-    if not target:
-        return None
-    rows = db.execute("SELECT * FROM students WHERE active = 1").fetchall()
-    for row in rows:
-        item = dict(row)
-        if _person_name_key(item.get("name")) == target:
+    rows = [dict(r) for r in db.execute("SELECT * FROM students WHERE active = 1").fetchall()]
+
+    for item in rows:
+        item_email = str(item.get("email") or "").strip().lower()
+        if email_n and item_email == email_n:
             return item
+    for item in rows:
+        item_email = str(item.get("email") or "").strip().lower()
+        item_local = item_email.split("@")[0] if item_email else ""
+        if email_local and item_local and email_local == item_local:
+            return item
+    for item in rows:
+        row_keys = _row_identity_keys(item)
+        if lookup_keys & row_keys:
+            return item
+        if roll and str(item.get("id") or "").strip().lower() == roll.lower():
+            return item
+    if name:
+        for item in rows:
+            if names_compatible(name, item.get("name")):
+                return item
+    if log_miss:
+        _log_student_lookup_miss(email, roll, name, db)
     return None
 
 
@@ -568,7 +717,7 @@ def persist_student_roster(db, students: list[dict], stamp: Optional[str] = None
             continue
         if not name:
             name = email.split("@")[0].replace(".", " ").title()
-        existing = find_ingested_student(db, email=email, name=name)
+        existing = find_ingested_student(db, email=email, name=name, roll_no=roll)
         student_id = (existing or {}).get("id") or roll or email or f"std-{name.lower().replace(' ', '-')}"
         if existing:
             db.execute(
@@ -615,8 +764,8 @@ def persist_student_roster(db, students: list[dict], stamp: Optional[str] = None
                 enroll_batch = batch
             if not subject:
                 continue
-            for key in {str(student_id), email, roll}:
-                if not key:
+            for key in identity_keys(student_id, email, roll, name):
+                if not key or len(key) < 3:
                     continue
                 db.execute(
                     """INSERT OR IGNORE INTO batch_allocations (roll_no, subject, batch)
@@ -631,11 +780,19 @@ def apply_ingested_student_profile(db, user: dict) -> dict:
     """Copy batch/name from the ingested student roster onto the signed-in user."""
     if not user or str(user.get("role") or "").upper() != "STUDENT":
         return user
-    match = find_ingested_student(db, email=user.get("email"), name=user.get("name"))
+    match = find_ingested_student(
+        db,
+        email=user.get("email"),
+        name=user.get("name"),
+        roll_no=str(user.get("roll_no") or user.get("id") or ""),
+        log_miss=False,
+    )
     if not match:
         return user
     batch = (match.get("batch_id") or "").strip()
     name = (match.get("name") or "").strip()
+    user["roll_no"] = match.get("id")
+    user["roster_id"] = match.get("id")
     changed = False
     if batch and batch != (user.get("batch_id") or ""):
         user["batch_id"] = batch

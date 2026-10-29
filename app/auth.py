@@ -161,7 +161,7 @@ def authenticate_user(email: str, password: str, expected_role: Optional[str] = 
                     from .services.roster import find_ingested_student
                     user_name = email.split("@")[0].replace(".", " ").title()
                     user_role = (expected_role or "STUDENT").upper()
-                    roster_student = find_ingested_student(db, email=email, name=user_name)
+                    roster_student = find_ingested_student(db, email=email, name=user_name, roll_no=email)
                     if roster_student:
                         user_name = roster_student.get("name") or user_name
                         batch = roster_student.get("batch_id") if user_role == "STUDENT" else None
@@ -232,7 +232,7 @@ def verify_and_provision_ms_user(
     stamp = now()
     with connect() as db:
         from .services.roster import find_ingested_student
-        roster_student = find_ingested_student(db, email=email, name=name) if role == "STUDENT" else None
+        roster_student = find_ingested_student(db, email=email, name=name, roll_no=email) if role == "STUDENT" else None
         if roster_student:
             name = roster_student.get("name") or name
             batch_id = batch_id or roster_student.get("batch_id")
