@@ -251,15 +251,50 @@ def preferred_batch_label(batch_name: Optional[str]) -> str:
     return str(batch_name or "").strip()
 
 
+def batch_tokens(value: Optional[str]) -> set[str]:
+    """Canonical tokens for Batch 3 / B3 / B3 of 3 / Data Visualization (B3 of 3)."""
+    text = _norm(value)
+    tokens: set[str] = set()
+    if not text:
+        return tokens
+    canon = normalize_batch(value)
+    if canon and canon != "ALL":
+        tokens.add(canon)
+        if re.fullmatch(r"B\d+", canon):
+            tokens.add(canon[1:])
+            tokens.add(f"batch {canon[1:]}")
+            tokens.add(f"b{canon[1:]}")
+    for match in re.findall(r"\b(?:batch[\s\-]*|b[\s\-]*)(\d+)\b", text):
+        tokens.add(f"B{match}")
+        tokens.add(match)
+        tokens.add(f"batch {match}")
+        tokens.add(f"b{match}")
+    of_match = re.findall(r"\b(\d+)\s*(?:of|/)\s*\d+\b", text)
+    for match in of_match:
+        tokens.add(f"B{match}")
+        tokens.add(match)
+    return {t for t in tokens if t}
+
+
 def batches_compatible(left: Optional[str], right: Optional[str]) -> bool:
-    """True when two batch labels refer to the same cohort, or either is All Batches."""
+    """True when two batch labels refer to the same cohort, including B3 vs Batch 3."""
+    explicit_all = {"all batches", "all", "*"}
+    if _norm(left) in explicit_all or _norm(right) in explicit_all:
+        return True
     a = normalize_batch(left)
     b = normalize_batch(right)
     if a == "ALL" or b == "ALL":
         return True
-    if not a or not b:
-        return False
-    return a == b
+    if a and b and a == b:
+        return True
+    left_tokens = batch_tokens(left)
+    right_tokens = batch_tokens(right)
+    if left_tokens and right_tokens and left_tokens & right_tokens:
+        return True
+    la, lb = _norm(left), _norm(right)
+    if la and lb and len(la) >= 2 and len(lb) >= 2 and (la in lb or lb in la):
+        return True
+    return False
 
 
 def subjects_compatible(left: Optional[str], right: Optional[str]) -> bool:
@@ -269,8 +304,40 @@ def subjects_compatible(left: Optional[str], right: Optional[str]) -> bool:
     return a == b or a in b or b in a
 
 
+def loose_identity_match(left: Optional[str], right: Optional[str]) -> bool:
+    a, b = _norm(left), _norm(right)
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    if len(a) >= 4 and len(b) >= 4 and (a in b or b in a):
+        return True
+    local_a = a.split("@")[0]
+    local_b = b.split("@")[0]
+    if local_a and local_b and local_a == local_b:
+        return True
+    return names_compatible(left, right)
+
+
+def _allocation_matches_target(item: dict, subject: Optional[str], batch_id: Optional[str]) -> bool:
+    combined = f"{item.get('subject') or ''} {item.get('batch') or ''}".strip()
+    if subject:
+        if not (
+            subjects_compatible(subject, item.get("subject"))
+            or subjects_compatible(subject, combined)
+        ):
+            return False
+    if is_all_batches(batch_id):
+        return True
+    return (
+        batches_compatible(batch_id, item.get("batch"))
+        or batches_compatible(batch_id, item.get("subject"))
+        or batches_compatible(batch_id, combined)
+    )
+
+
 def list_recipient_students(subject: Optional[str] = None, batch_id: Optional[str] = None) -> list[dict]:
-    """Students who should receive a subject/batch notification (enrollments + aliases)."""
+    """Collect student emails from ingested Students-Testng / Batch Allocation rows."""
     with connect() as db:
         students = [
             dict(r)
@@ -282,43 +349,70 @@ def list_recipient_students(subject: Optional[str] = None, batch_id: Optional[st
             dict(r)
             for r in db.execute("SELECT roll_no, subject, batch FROM batch_allocations").fetchall()
         ]
-    by_key: dict[str, list[dict]] = {}
-    for row in allocations:
-        key = str(row.get("roll_no") or "").strip().lower()
-        if key:
-            by_key.setdefault(key, []).append(row)
-    all_batches = is_all_batches(batch_id)
-    recipients = []
-    seen = set()
-    for student in students:
-        email = (student.get("email") or "").strip().lower()
-        if not email or email in seen:
+        user_rows = [
+            dict(r)
+            for r in db.execute(
+                "SELECT email, name, batch_id FROM users WHERE UPPER(IFNULL(role, '')) = 'STUDENT'"
+            ).fetchall()
+        ]
+
+    recipients: list[dict] = []
+    seen: set[str] = set()
+
+    def add_recipient(email: Optional[str], name: Optional[str] = None, sid: Optional[str] = None):
+        value = (email or "").strip().lower()
+        if not value or "@" not in value or value in seen:
+            return
+        seen.add(value)
+        recipients.append({"id": sid, "name": name or "", "email": value})
+
+    def email_for_key(raw: Optional[str], fallback_name: Optional[str] = None) -> tuple[Optional[str], Optional[str], Optional[str]]:
+        for student in students:
+            if (
+                loose_identity_match(raw, student.get("id"))
+                or loose_identity_match(raw, student.get("email"))
+                or loose_identity_match(raw, student.get("name"))
+                or loose_identity_match(fallback_name, student.get("name"))
+            ):
+                email = (student.get("email") or "").strip()
+                if email:
+                    return email, student.get("name"), student.get("id")
+        for row in user_rows:
+            if loose_identity_match(raw, row.get("email")) or loose_identity_match(raw, row.get("name")) or loose_identity_match(fallback_name, row.get("name")):
+                email = (row.get("email") or "").strip()
+                if email:
+                    return email, row.get("name"), None
+        text = str(raw or "").strip()
+        if "@" in text:
+            return text, fallback_name, text
+        return None, fallback_name, None
+
+    matched_any_allocation = False
+    for item in allocations:
+        if not _allocation_matches_target(item, subject, batch_id):
             continue
-        keys = {str(student.get("id") or "").lower(), email}
-        enrolled = []
-        for key in keys:
-            enrolled.extend(by_key.get(key) or [])
-        matched = False
-        if enrolled:
-            for item in enrolled:
-                if subject and not subjects_compatible(subject, item.get("subject")):
-                    continue
-                if all_batches or batches_compatible(batch_id, item.get("batch") or student.get("batch_id")):
-                    matched = True
-                    break
-        elif subject and not all_batches:
-            matched = batches_compatible(batch_id, student.get("batch_id"))
-        elif not subject:
-            matched = all_batches or batches_compatible(batch_id, student.get("batch_id"))
-        if not matched:
-            continue
-        seen.add(email)
-        recipients.append(
-            {
-                "id": student.get("id"),
-                "name": student.get("name"),
-                "email": email,
-            }
+        matched_any_allocation = True
+        email, name, sid = email_for_key(item.get("roll_no"))
+        add_recipient(email, name, sid)
+
+    if not matched_any_allocation or is_all_batches(batch_id):
+        for student in students:
+            if subject and matched_any_allocation:
+                continue
+            if is_all_batches(batch_id) or batches_compatible(batch_id, student.get("batch_id")):
+                add_recipient(student.get("email"), student.get("name"), student.get("id"))
+
+    if not recipients:
+        logger.warning(
+            "Assignment recipient lookup returned 0 emails subject=%r batch=%r students=%s allocation_keys=%s",
+            subject,
+            batch_id,
+            [s.get("email") or s.get("id") for s in students[:40]],
+            [str(r.get("roll_no")) for r in allocations[:40]],
+        )
+        print(
+            f"Assignment recipient lookup returned 0 emails subject={subject!r} batch={batch_id!r}",
+            flush=True,
         )
     return recipients
 
@@ -417,6 +511,16 @@ def student_enrollments(user: Optional[dict]) -> list[dict]:
                 continue
             if compact_identity(roll_value) in compact_keys:
                 matched_rows.append(item)
+                continue
+            if loose_identity_match(email, roll_value) or loose_identity_match(user.get("name"), roll_value):
+                matched_rows.append(item)
+                continue
+            if linked and (
+                loose_identity_match(linked.get("id"), roll_value)
+                or loose_identity_match(linked.get("email"), roll_value)
+                or loose_identity_match(linked.get("name"), roll_value)
+            ):
+                matched_rows.append(item)
         if not linked and not matched_rows:
             _log_student_lookup_miss(email, roll, user.get("name"), db)
         if not matched_rows:
@@ -430,13 +534,13 @@ def student_enrollments(user: Optional[dict]) -> list[dict]:
             logger.warning(message)
         for item in matched_rows:
             subject, batch = extract_subject_and_batch(item.get("subject"), item.get("batch"))
-            if not subject or not batch or is_all_batches(batch):
+            if not subject:
                 continue
-            marker = (subject.lower(), normalize_batch(batch))
+            marker = (subject.lower(), normalize_batch(batch) or "")
             if marker in seen:
                 continue
             seen.add(marker)
-            enrollments.append({"subject": subject, "batch": batch})
+            enrollments.append({"subject": subject, "batch": batch, "raw": item.get("subject")})
     return enrollments
 
 
@@ -449,6 +553,27 @@ def list_student_class_sessions(user: Optional[dict], sessions: Optional[list[di
         ).fetchall()]
         all_sessions = [dict(r) if not isinstance(r, dict) else r for r in rows]
     matched = [row for row in all_sessions if enrollment_matches_session(row, user, enrollments)]
+    if not matched and enrollments:
+        enrolled_subjects = [item.get("subject") for item in enrollments]
+        enrolled_batches = [item.get("batch") for item in enrollments if item.get("batch")]
+        matched = [
+            row for row in all_sessions
+            if any(subjects_compatible(row.get("subject"), subject) for subject in enrolled_subjects)
+            and (
+                not enrolled_batches
+                or any(
+                    batches_compatible(row.get("batch") or row.get("subject"), batch)
+                    for batch in enrolled_batches
+                )
+                or not str(row.get("batch") or "").strip()
+            )
+        ]
+    if not matched and enrollments:
+        enrolled_subjects = [item.get("subject") for item in enrollments]
+        matched = [
+            row for row in all_sessions
+            if any(subjects_compatible(row.get("subject"), subject) for subject in enrolled_subjects)
+        ]
     if not matched and enrollments:
         subjects = sorted({(s.get("subject"), s.get("batch")) for s in all_sessions})
         message = (
@@ -478,15 +603,29 @@ def enrollment_matches_session(session: dict, user: Optional[dict], enrollments:
     if not enrollments:
         return False
     session_subject, session_batch = extract_subject_and_batch(session.get("subject"), session.get("batch"))
+    session_label = f"{session.get('subject') or ''} {session.get('batch') or ''}"
+    enrolled_batches = [item.get("batch") for item in enrollments if item.get("batch")]
     for item in enrollments:
         enroll_subject, enroll_batch = extract_subject_and_batch(item.get("subject"), item.get("batch"))
-        if not enroll_subject or not enroll_batch:
+        if not enroll_subject:
             continue
-        if not subjects_compatible(session_subject, enroll_subject):
+        if not subjects_compatible(session_subject, enroll_subject) and not subjects_compatible(session_label, enroll_subject):
             continue
         if _norm(session_batch) in {"all batches", "all", "*"}:
             return True
-        if session_batch and batches_compatible(session_batch, enroll_batch):
+        if not session_batch and not enroll_batch:
+            return True
+        if enroll_batch and (
+            batches_compatible(session_batch, enroll_batch)
+            or batches_compatible(session_label, enroll_batch)
+        ):
+            return True
+        if not enroll_batch:
+            return True
+        if enrolled_batches and any(
+            batches_compatible(session_batch, tag) or batches_compatible(session_label, tag)
+            for tag in enrolled_batches
+        ):
             return True
     return False
 
@@ -517,8 +656,13 @@ def assignment_visible_to_student(assignment: dict, user: Optional[dict]) -> boo
     batch = assignment.get("batch_id") or user.get("batch_id")
     if enrollments:
         return any(
-            subjects_compatible(subject, item.get("subject"))
-            and (is_all_batches(batch) or batches_compatible(batch, item.get("batch") or user.get("batch_id")))
+            (not subject or subjects_compatible(subject, item.get("subject")) or subjects_compatible(subject, item.get("raw")))
+            and (
+                is_all_batches(batch)
+                or batches_compatible(batch, item.get("batch"))
+                or batches_compatible(batch, item.get("subject"))
+                or batches_compatible(batch, item.get("raw"))
+            )
             for item in enrollments
         )
     return batches_compatible(assignment.get("batch_id"), user.get("batch_id"))
@@ -684,6 +828,10 @@ def find_ingested_student(
         item_email = str(item.get("email") or "").strip().lower()
         if email_n and item_email == email_n:
             return item
+        if email_n and item_email and len(email_n) >= 6 and (email_n in item_email or item_email in email_n):
+            return item
+        if email_n and loose_identity_match(email_n, item.get("name")):
+            return item
     for item in rows:
         item_email = str(item.get("email") or "").strip().lower()
         item_local = item_email.split("@")[0] if item_email else ""
@@ -697,7 +845,9 @@ def find_ingested_student(
             return item
     if name:
         for item in rows:
-            if names_compatible(name, item.get("name")):
+            if names_compatible(name, item.get("name")) or loose_identity_match(name, item.get("name")):
+                return item
+            if loose_identity_match(name, item.get("email")) or loose_identity_match(name, item.get("id")):
                 return item
     if log_miss:
         _log_student_lookup_miss(email, roll, name, db)
@@ -759,13 +909,16 @@ def persist_student_roster(db, students: list[dict], stamp: Optional[str] = None
         if item.get("subject"):
             enrollments.append({"subject": item.get("subject"), "batch": batch})
         for enrollment in enrollments:
-            subject = _clean_subject_name(enrollment.get("subject") if isinstance(enrollment, dict) else enrollment)
-            enroll_batch = ""
-            if isinstance(enrollment, dict):
-                enroll_batch = str(enrollment.get("batch") or "").strip()
-            else:
-                enroll_batch = str(batch or "").strip()
-            if not subject or not enroll_batch:
+            raw_subject = enrollment.get("subject") if isinstance(enrollment, dict) else enrollment
+            raw_batch = enrollment.get("batch") if isinstance(enrollment, dict) else batch
+            subject, enroll_batch = extract_subject_and_batch(raw_subject, raw_batch)
+            if not enroll_batch:
+                enroll_batch = str(raw_batch or batch or "").strip()
+            if not subject:
+                continue
+            if not enroll_batch:
+                enroll_batch = str(raw_subject or "").strip()
+            if not subject:
                 continue
             for key in identity_keys(student_id, email, roll, name):
                 if not key or len(key) < 3:

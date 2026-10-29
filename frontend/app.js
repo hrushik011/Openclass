@@ -2198,13 +2198,15 @@
     if (role !== "STUDENT") return items;
     const enrollments = state.enrollments || [];
     if (!enrollments.length) return items;
-    return items.filter((session) => enrollments.some((enr) => {
-      if (!subjectsMatch(session.subject, enr.subject)) return false;
+    const filtered = items.filter((session) => enrollments.some((enr) => {
+      const subjectHit = subjectsMatch(session.subject, enr.subject) || subjectsMatch(session.subject, enr.raw);
       const sessionBatch = session.batch || extractBatchFromLabel(session.subject);
-      if (normalizeBatch(sessionBatch) === "ALL") return true;
-      if (!enr.batch || !sessionBatch) return false;
-      return batchesMatch(sessionBatch, enr.batch);
+      const batchHit = !enr.batch || !sessionBatch || normalizeBatch(sessionBatch) === "ALL"
+        || batchesMatch(sessionBatch, enr.batch)
+        || batchesMatch(session.subject, enr.batch);
+      return subjectHit && batchHit;
     }));
+    return filtered.length ? filtered : items;
   }
 
   function todaysEnrolledClasses() {

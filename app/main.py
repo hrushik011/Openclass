@@ -77,6 +77,7 @@ from .services.roster import (
     listed_roster_batches,
     note_visible_to_student,
     persist_student_roster,
+    apply_ingested_student_profile,
     rebuild_faculty_subject_batches,
     roster_status,
     session_visible_to_user,
@@ -530,6 +531,7 @@ def _student_today_sessions(classes: list[dict]) -> list[dict]:
 @app.get("/api/student/timetable")
 def student_timetable(current_user: dict = Depends(require_student)):
     with connect() as db:
+        apply_ingested_student_profile(db, current_user)
         rows = [dict(r) for r in db.execute(
             "SELECT * FROM class_sessions ORDER BY class_date, weekday, start_time"
         ).fetchall()]
@@ -1106,6 +1108,15 @@ async def create_assignment(
     )
 
     target_students = recipients_for_subject_batch(subject or "", batch_id)
+    if not target_students:
+        target_students = list_recipient_students(subject=None, batch_id=batch_id)
+    logger.info(
+        "Assignment %s targeting %s / %s resolved %s roster emails",
+        created.get("id"),
+        subject,
+        batch_id,
+        len(target_students),
+    )
 
     def dispatch_assignment_announcement():
         try:

@@ -4,6 +4,7 @@ from typing import List, Optional
 
 from ..db import connect, now
 from .notification import NotificationService
+from .roster import list_recipient_students
 
 logger = logging.getLogger("openclass.reminders")
 
@@ -56,22 +57,23 @@ def check_and_send_assignment_reminders() -> int:
 
         batch_id = assignment.get("batch_id")
         assignment_id = assignment.get("id")
+        students = list_recipient_students(subject=assignment.get("subject"), batch_id=batch_id)
+        if not students:
+            students = list_recipient_students(subject=None, batch_id=batch_id)
 
-        # Fetch enrolled students in this specific batch who have NOT yet submitted
+        submitted_ids = set()
         with connect() as db:
-            students = [
-                dict(r)
+            submitted_ids = {
+                str(r[0])
                 for r in db.execute(
-                    """
-                    SELECT s.id, s.name, s.email, s.phone FROM students s
-                    WHERE (s.batch_id = ? OR ? LIKE '%' || s.batch_id || '%') AND s.active = 1
-                    AND s.id NOT IN (
-                        SELECT student_id FROM submissions WHERE assignment_id = ?
-                    )
-                    """,
-                    (batch_id, batch_id, assignment_id),
+                    "SELECT student_id FROM submissions WHERE assignment_id = ?",
+                    (assignment_id,),
                 ).fetchall()
-            ]
+            }
+        students = [
+            student for student in students
+            if str(student.get("id") or student.get("email") or "") not in submitted_ids
+        ]
 
         for student in students:
             student_id = str(student.get("id"))
