@@ -290,59 +290,89 @@ def list_batches_for_subject(user: Optional[dict], subject: str) -> list[str]:
     return ["All Batches"] + batches
 
 
-def student_subscribed_subjects(user: Optional[dict]) -> list[str]:
+def student_enrollments(user: Optional[dict]) -> list[dict]:
+    """Exact subject+batch rows from the ingested student roster for this learner."""
     if not user:
         return []
-    batch = user.get("batch_id")
-    student_id = str(user.get("id") or "")
     email = (user.get("email") or "").strip().lower()
+    enrollments = []
+    seen = set()
+    with connect() as db:
+        linked = find_ingested_student(
+            db,
+            email=email,
+            name=user.get("name"),
+            roll_no=str(user.get("id") or ""),
+        )
+        keys = set()
+        if linked:
+            keys.add(str(linked.get("id") or ""))
+            if linked.get("email"):
+                keys.add(str(linked["email"]).lower())
+        if user.get("id") is not None:
+            keys.add(str(user.get("id")))
+        if email:
+            keys.add(email)
+        keys = {k for k in keys if k}
+        if not keys:
+            return []
+        placeholders = ",".join("?" for _ in keys)
+        rows = db.execute(
+            f"""SELECT subject, batch FROM batch_allocations
+                WHERE roll_no IN ({placeholders}) AND TRIM(IFNULL(subject, '')) != ''""",
+            tuple(keys),
+        ).fetchall()
+        fallback_batch = (linked or {}).get("batch_id") or user.get("batch_id")
+        for row in rows:
+            item = dict(row)
+            subject = _clean_subject_name(item.get("subject"))
+            batch = str(item.get("batch") or fallback_batch or "").strip()
+            if not subject:
+                continue
+            marker = (subject.lower(), normalize_batch(batch))
+            if marker in seen:
+                continue
+            seen.add(marker)
+            enrollments.append({"subject": subject, "batch": batch})
+    return enrollments
+
+
+def student_subscribed_subjects(user: Optional[dict]) -> list[str]:
     seen = set()
     subjects = []
-
-    def add(raw: Optional[str]):
-        name = _clean_subject_name(raw)
+    for item in student_enrollments(user):
+        name = item.get("subject") or ""
         key = name.lower()
         if name and key not in seen:
             seen.add(key)
             subjects.append(name)
-
-    with connect() as db:
-        linked = find_ingested_student(db, email=email, name=user.get("name"))
-        if linked:
-            student_id = str(linked["id"])
-            batch = batch or linked["batch_id"]
-        roll_ids = {student_id} if student_id else set()
-        if email:
-            roll_ids.add(email)
-        for roll in [rid for rid in roll_ids if rid]:
-            for row in db.execute(
-                "SELECT DISTINCT subject FROM batch_allocations WHERE roll_no = ?",
-                (roll,),
-            ).fetchall():
-                add(dict(row).get("subject"))
-        sessions = db.execute(
-            "SELECT subject, batch FROM class_sessions WHERE subject IS NOT NULL"
-        ).fetchall()
-        for row in sessions:
-            item = dict(row)
-            if batches_compatible(item.get("batch"), batch):
-                add(item.get("subject"))
     return subjects
 
 
-def session_visible_to_user(session: dict, user: Optional[dict]) -> bool:
+def enrollment_matches_session(session: dict, user: Optional[dict], enrollments: Optional[list[dict]] = None) -> bool:
+    enrollments = enrollments if enrollments is not None else student_enrollments(user)
+    if not enrollments:
+        return False
+    session_subject = session.get("subject")
+    session_batch = session.get("batch")
+    student_batch = (user or {}).get("batch_id")
+    for item in enrollments:
+        if not subjects_compatible(session_subject, item.get("subject")):
+            continue
+        enroll_batch = item.get("batch") or student_batch
+        if batches_compatible(session_batch, enroll_batch) or is_all_batches(session_batch):
+            return True
+    return False
+
+
+def session_visible_to_user(session: dict, user: Optional[dict], enrollments: Optional[list[dict]] = None) -> bool:
     if not user:
         return True
     role = str(user.get("role") or "").upper()
     if is_generalist_user(user) or role in {"ADMIN", "GENERALIST", "TEST"}:
         return True
     if role == "STUDENT":
-        batch = user.get("batch_id")
-        subscribed = {s.lower() for s in student_subscribed_subjects(user)}
-        if batches_compatible(session.get("batch"), batch):
-            return True
-        subject = _clean_subject_name(session.get("subject")).lower()
-        return bool(subject and subject in subscribed and is_all_batches(session.get("batch")))
+        return enrollment_matches_session(session, user, enrollments)
     if role == "FACULTY":
         keys = faculty_match_keys(user)
         faculty_name = _norm(session.get("faculty_name"))
@@ -356,24 +386,32 @@ def session_visible_to_user(session: dict, user: Optional[dict]) -> bool:
 def assignment_visible_to_student(assignment: dict, user: Optional[dict]) -> bool:
     if not user:
         return True
-    batch = user.get("batch_id")
-    if batches_compatible(assignment.get("batch_id"), batch):
-        return True
-    subscribed = student_subscribed_subjects(user)
+    enrollments = student_enrollments(user)
     subject = assignment.get("subject")
-    return bool(subject and any(subjects_compatible(subject, item) for item in subscribed) and is_all_batches(assignment.get("batch_id")))
+    batch = assignment.get("batch_id") or user.get("batch_id")
+    if enrollments:
+        return any(
+            subjects_compatible(subject, item.get("subject"))
+            and (is_all_batches(batch) or batches_compatible(batch, item.get("batch") or user.get("batch_id")))
+            for item in enrollments
+        )
+    return batches_compatible(assignment.get("batch_id"), user.get("batch_id"))
 
 
 def note_visible_to_student(note: dict, user: Optional[dict]) -> bool:
     if not user:
         return True
-    batch = user.get("batch_id")
-    if batches_compatible(note.get("specialization"), batch):
-        subscribed = student_subscribed_subjects(user)
-        if not subscribed:
-            return True
-        return any(subjects_compatible(note.get("subject"), item) for item in subscribed)
-    return False
+    enrollments = student_enrollments(user)
+    if not enrollments:
+        return False
+    return any(
+        subjects_compatible(note.get("subject"), item.get("subject"))
+        and (
+            is_all_batches(note.get("specialization"))
+            or batches_compatible(note.get("specialization"), item.get("batch") or user.get("batch_id"))
+        )
+        for item in enrollments
+    )
 
 
 def listed_roster_batches() -> list[dict]:
@@ -424,12 +462,25 @@ def _person_name_key(value: Optional[str]) -> str:
     return " ".join(sorted(tokens))
 
 
-def find_ingested_student(db, email: Optional[str] = None, name: Optional[str] = None) -> Optional[dict]:
+def find_ingested_student(
+    db,
+    email: Optional[str] = None,
+    name: Optional[str] = None,
+    roll_no: Optional[str] = None,
+) -> Optional[dict]:
     email_n = (email or "").strip().lower()
     if email_n:
         row = db.execute(
             "SELECT * FROM students WHERE LOWER(email) = ? AND active = 1",
             (email_n,),
+        ).fetchone()
+        if row:
+            return dict(row)
+    roll = str(roll_no or "").strip()
+    if roll:
+        row = db.execute(
+            "SELECT * FROM students WHERE id = ? AND active = 1",
+            (roll,),
         ).fetchone()
         if row:
             return dict(row)
@@ -495,12 +546,26 @@ def persist_student_roster(db, students: list[dict], stamp: Optional[str] = None
                      updated_at=excluded.updated_at""",
                 (email, name, phone or None, batch or None, stamp, stamp),
             )
-        if batch and item.get("subject"):
-            db.execute(
-                """INSERT OR IGNORE INTO batch_allocations (roll_no, subject, batch)
-                   VALUES (?, ?, ?)""",
-                (str(student_id), item.get("subject"), batch),
-            )
+        enrollments = list(item.get("enrollments") or [])
+        if item.get("subject"):
+            enrollments.append({"subject": item.get("subject"), "batch": batch})
+        for enrollment in enrollments:
+            subject = _clean_subject_name(enrollment.get("subject") if isinstance(enrollment, dict) else enrollment)
+            enroll_batch = ""
+            if isinstance(enrollment, dict):
+                enroll_batch = str(enrollment.get("batch") or batch or "").strip()
+            else:
+                enroll_batch = batch
+            if not subject:
+                continue
+            for key in {str(student_id), email, roll}:
+                if not key:
+                    continue
+                db.execute(
+                    """INSERT OR IGNORE INTO batch_allocations (roll_no, subject, batch)
+                       VALUES (?, ?, ?)""",
+                    (key, subject, enroll_batch),
+                )
         saved += 1
     return saved
 
@@ -530,6 +595,57 @@ def apply_ingested_student_profile(db, user: dict) -> dict:
             (batch or None, name or None, stamp, user["id"]),
         )
     return user
+
+
+def faculty_for_student(user: Optional[dict]) -> list[dict]:
+    """Faculty who teach this student's enrolled subject+batch slots."""
+    if not user:
+        return []
+    with connect() as db:
+        sessions = [dict(r) for r in db.execute("SELECT subject, batch, faculty_name FROM class_sessions").fetchall()]
+        faculty_rows = [dict(r) for r in db.execute("SELECT * FROM faculty WHERE active = 1").fetchall()]
+    names = []
+    seen = set()
+    enrollments = student_enrollments(user)
+    for session in sessions:
+        if not enrollment_matches_session(session, user, enrollments):
+            continue
+        raw = str(session.get("faculty_name") or "").strip()
+        if not raw:
+            continue
+        key = _norm(_strip_titles(raw))
+        if key in seen:
+            continue
+        seen.add(key)
+        names.append(raw)
+    people = []
+    for name in names:
+        key = _norm(_strip_titles(name))
+        match = next(
+            (
+                row
+                for row in faculty_rows
+                if _norm(_strip_titles(row.get("full_name") or "")) == key
+                or key in _norm(row.get("full_name") or "")
+            ),
+            None,
+        )
+        people.append(
+            {
+                "id": (match or {}).get("id"),
+                "full_name": (match or {}).get("full_name") or name,
+                "email": (match or {}).get("email") or "",
+                "subjects": sorted(
+                    {
+                        _clean_subject_name(s.get("subject"))
+                        for s in sessions
+                        if _norm(s.get("faculty_name")) == _norm(name) and enrollment_matches_session(s, user, enrollments)
+                    }
+                ),
+            }
+        )
+    people.sort(key=lambda item: str(item.get("full_name") or "").lower())
+    return people
 
 
 def roster_status() -> dict:

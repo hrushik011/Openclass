@@ -2092,10 +2092,30 @@
   }
 
   // --- 4. Student Dashboard ---
+  function isClassToday(session) {
+    if (!session) return false;
+    const now = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
+    const weekday = now.toLocaleDateString("en-US", { weekday: "long" });
+    const ymd = [
+      now.getFullYear(),
+      String(now.getMonth() + 1).padStart(2, "0"),
+      String(now.getDate()).padStart(2, "0")
+    ].join("-");
+    if (session.class_date) {
+      return String(session.class_date).slice(0, 10) === ymd;
+    }
+    return String(session.weekday || "").toLowerCase() === weekday.toLowerCase();
+  }
+
+  function todaysEnrolledClasses() {
+    return (state.classes || []).filter((item) => isClassToday(item));
+  }
+
   function renderStudentDashboard() {
     const user = state.user || {};
     const studentBatch = user.batch_id || "your batch";
-    const upNext = (state.classes && state.classes[0]) || null;
+    const todayClasses = todaysEnrolledClasses();
+    const upNext = todayClasses[0] || null;
     const allAssignments = state.assignments || [];
     const pendingAssignments = allAssignments.filter((a) => !a.has_submitted);
     const graphSubject = upNext ? cleanSubjectName(upNext.subject) : (state.subjects[0] || "No class yet");
@@ -2179,10 +2199,10 @@
             <section class="panel schedule-panel">
               <div class="panel-head">
                 <div class="panel-title">${getIcon("calendar", 15)} Today’s Rhythm</div>
-                <span class="panel-meta">${state.classes.length} session${state.classes.length === 1 ? "" : "s"}</span>
+                <span class="panel-meta">${todayClasses.length} today</span>
               </div>
               <div class="schedule-list">
-                ${state.classes.length ? state.classes.slice(0, 5).map((c, i) => `
+                ${todayClasses.length ? todayClasses.map((c, i) => `
                   <div class="schedule-item">
                     <div class="schedule-time">${c.start_time}</div>
                     <div class="schedule-bar"></div>
@@ -2192,7 +2212,7 @@
                     </div>
                     ${i === 0 ? `<span class="status-pill">NEXT</span>` : ""}
                   </div>
-                `).join("") : `<p style="font-size: 11px; color: var(--oc-muted); padding: 8px 4px;">No timetable slots for ${studentBatch} yet.</p>`}
+                `).join("") : `<p style="font-size: 11px; color: var(--oc-muted); padding: 8px 4px;">No enrolled lectures today for ${studentBatch}.</p>`}
               </div>
             </section>
           </div>
@@ -2505,25 +2525,28 @@
           <div>
             <div class="eyebrow">${isFaculty ? "Faculty Portal" : "Student Portal"} · Connected Directory</div>
             <h1 class="hero-title">${isFaculty ? "The people behind every class." : 'Meet your <span class="accent">teachers.</span>'}</h1>
-            <p class="hero-copy">Find teaching teams, mentors, and batch coordinators in one shared directory.</p>
+            <p class="hero-copy">${isFaculty
+        ? "Find teaching teams and batch coordinators. Contact details are limited to official email."
+        : "Faculty mapped to the subjects you are enrolled in. Contact details are limited to official email."}</p>
           </div>
-          <div class="date-note">${people.length} active educators</div>
+          <div class="date-note">${people.length} educator${people.length === 1 ? "" : "s"}</div>
         </div>
 
         <div class="people-grid">
-          ${!people.length ? `<p style="font-size: 11px; color: var(--oc-muted);">No faculty records in the directory yet.</p>` : ""}
+          ${!people.length ? `<p style="font-size: 11px; color: var(--oc-muted);">${isFaculty ? "No faculty records in the directory yet." : "No faculty mapped to your enrolled subjects yet."}</p>` : ""}
           ${people.map((p) => {
-      const inits = (p.full_name || "Faculty").split(" ").map((n) => n[0]).join("").slice(0, 2).toUpperCase();
+      const inits = (p.full_name || p.name || "Faculty").split(" ").map((n) => n[0]).join("").slice(0, 2).toUpperCase();
+      const subjects = (p.subjects || []).filter(Boolean).join(" · ");
       return `
               <article class="panel person-card">
                 <div class="person-avatar purple">${inits}</div>
                 <div class="person-copy">
-                  <strong>${p.full_name}</strong>
-                  <span>Course Faculty</span>
-                  <small>${p.email}${p.phone ? " · " + p.phone : ""}</small>
+                  <strong>${p.full_name || p.name}</strong>
+                  <span>${subjects || "Course Faculty"}</span>
+                  <small>${p.email || "Email not listed"}</small>
                 </div>
                 <div class="person-actions">
-                  <a href="mailto:${p.email}" class="secondary-btn" style="text-decoration: none;">Contact</a>
+                  ${p.email ? `<a href="mailto:${p.email}" class="secondary-btn" style="text-decoration: none;">Email</a>` : ""}
                 </div>
               </article>
             `;

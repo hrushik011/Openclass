@@ -72,13 +72,14 @@ from .services.roster import (
     is_generalist_user,
     list_batches_for_subject,
     list_subjects_for_user,
+    faculty_for_student,
     listed_roster_batches,
     note_visible_to_student,
     persist_student_roster,
     rebuild_faculty_subject_batches,
     roster_status,
     session_visible_to_user,
-    student_subscribed_subjects,
+    student_enrollments,
     _session_exists,
 )
 from .timetable_parser import parse_student_roster, parse_timetable
@@ -510,11 +511,7 @@ def list_classes(
 
         result = []
         role = str((current_user or {}).get("role") or "").upper()
-        student_subjects = (
-            {s.lower() for s in student_subscribed_subjects(current_user)}
-            if current_user and role == "STUDENT"
-            else None
-        )
+        enrollments = student_enrollments(current_user) if current_user and role == "STUDENT" else None
         faculty_subjects = None
         faculty_keys = []
         if current_user and role == "FACULTY" and not is_generalist_user(current_user):
@@ -525,13 +522,7 @@ def list_classes(
             if batch and not batches_compatible(c.get("batch"), batch):
                 continue
             if current_user and role == "STUDENT":
-                if not (
-                    batches_compatible(c.get("batch"), current_user.get("batch_id"))
-                    or (
-                        is_all_batches(c.get("batch"))
-                        and (c.get("subject") or "").strip().lower() in (student_subjects or set())
-                    )
-                ):
+                if not session_visible_to_user(c, current_user, enrollments):
                     continue
             elif faculty_subjects is not None:
                 faculty_name = (c.get("faculty_name") or "").strip().lower()
@@ -1314,7 +1305,8 @@ def get_student_attendance(
             scope_user.setdefault("batch_id", batch_id)
 
         all_sessions = [dict(r) for r in db.execute("SELECT id, subject, batch FROM class_sessions").fetchall()]
-        sessions = [s for s in all_sessions if session_visible_to_user(s, scope_user)]
+        enrollments = student_enrollments(scope_user)
+        sessions = [s for s in all_sessions if session_visible_to_user(s, scope_user, enrollments)]
 
         lookup_ids = {str(student_id)}
         if student:
@@ -1346,6 +1338,8 @@ def get_student_attendance(
             if any(s.get("id") == class_id or str(s.get("id")) == str(class_id) for s in sessions):
                 continue
             clean_name = _clean_subject_name(r_dict.get("subject", "General"))
+            if not session_visible_to_user({"subject": clean_name, "batch": r_dict.get("batch_id") or batch_id}, scope_user, enrollments):
+                continue
             if clean_name not in subject_map:
                 subject_map[clean_name] = {"attended": 0, "total": 0, "live_sessions": 0}
             subject_map[clean_name]["live_sessions"] += 1
@@ -1748,10 +1742,17 @@ def get_batches():
 
 
 @app.get("/api/people")
-def get_people():
+def get_people(
+    current_user: Optional[dict] = Depends(get_optional_current_user),
+):
+    role = str((current_user or {}).get("role") or "").upper()
+    if current_user and role == "STUDENT":
+        return faculty_for_student(current_user)
     with connect() as db:
-        faculty = [dict(r) for r in db.execute("SELECT * FROM faculty WHERE active = 1").fetchall()]
-        return faculty
+        rows = db.execute(
+            "SELECT id, full_name, email FROM faculty WHERE active = 1"
+        ).fetchall()
+        return [dict(r) for r in rows]
 
 
 class ThreadCreate(BaseModel):
