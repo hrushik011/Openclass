@@ -194,6 +194,21 @@ def is_all_batches(batch: Optional[str]) -> bool:
     return _norm(batch) in {"", "all batches", "all", "*"}
 
 
+def extract_subject_and_batch(subject: Optional[str], batch: Optional[str] = None) -> tuple[str, str]:
+    raw_subject = str(subject or "").strip()
+    raw_batch = str(batch or "").strip()
+    cleaned = _clean_subject_name(raw_subject)
+    if raw_batch:
+        return cleaned, raw_batch
+    of_match = re.search(r"\b(?:batch\s*|b\s*)?(\d+)\s*(?:of|/)\s*\d+\b", raw_subject, re.IGNORECASE)
+    if of_match:
+        return cleaned, f"Batch {of_match.group(1)}"
+    numbered = _BATCH_NUMBER_RE.search(raw_subject)
+    if numbered:
+        return cleaned, f"Batch {numbered.group(1)}"
+    return cleaned, ""
+
+
 _BATCH_NUMBER_RE = re.compile(
     r"\b(?:batch[\s\-]*|b[\s\-]*)(\d+)\b",
     re.IGNORECASE,
@@ -250,7 +265,7 @@ def batches_compatible(left: Optional[str], right: Optional[str]) -> bool:
 def subjects_compatible(left: Optional[str], right: Optional[str]) -> bool:
     a, b = _clean_subject_name(left).lower(), _clean_subject_name(right).lower()
     if not a or not b:
-        return True
+        return False
     return a == b or a in b or b in a
 
 
@@ -413,11 +428,9 @@ def student_enrollments(user: Optional[dict]) -> list[dict]:
             )
             print(message, flush=True)
             logger.warning(message)
-        fallback_batch = (linked or {}).get("batch_id") or user.get("batch_id")
         for item in matched_rows:
-            subject = _clean_subject_name(item.get("subject"))
-            batch = str(item.get("batch") or fallback_batch or "").strip()
-            if not subject:
+            subject, batch = extract_subject_and_batch(item.get("subject"), item.get("batch"))
+            if not subject or not batch or is_all_batches(batch):
                 continue
             marker = (subject.lower(), normalize_batch(batch))
             if marker in seen:
@@ -436,26 +449,16 @@ def list_student_class_sessions(user: Optional[dict], sessions: Optional[list[di
         ).fetchall()]
         all_sessions = [dict(r) if not isinstance(r, dict) else r for r in rows]
     matched = [row for row in all_sessions if enrollment_matches_session(row, user, enrollments)]
-    if matched:
-        return matched
-    if not enrollments:
-        return []
-    # Elective rows exist: keep the weekly grid populated by matching subject even if
-    # the Excel batch label does not exactly equal the Time Table batch cell.
-    relaxed = []
-    for row in all_sessions:
-        if any(subjects_compatible(row.get("subject"), item.get("subject")) for item in enrollments):
-            relaxed.append(row)
-    if not relaxed:
-        subjects = sorted({s.get("subject") for s in all_sessions})
+    if not matched and enrollments:
+        subjects = sorted({(s.get("subject"), s.get("batch")) for s in all_sessions})
         message = (
             "Student timetable matched 0 lectures despite enrollments "
-            f"email={(user or {}).get('email')!r} enrollments={enrollments} "
-            f"available_session_subjects={subjects}"
+            f"email={(user or {}).get('email')!r} roll={(user or {}).get('roll_no')!r} "
+            f"enrollments={enrollments} available_sessions={list(subjects)[:40]}"
         )
         print(message, flush=True)
         logger.warning(message)
-    return relaxed
+    return matched
 
 
 def student_subscribed_subjects(user: Optional[dict]) -> list[str]:
@@ -474,16 +477,16 @@ def enrollment_matches_session(session: dict, user: Optional[dict], enrollments:
     enrollments = enrollments if enrollments is not None else student_enrollments(user)
     if not enrollments:
         return False
-    session_subject = session.get("subject")
-    session_batch = session.get("batch")
-    student_batch = (user or {}).get("batch_id")
+    session_subject, session_batch = extract_subject_and_batch(session.get("subject"), session.get("batch"))
     for item in enrollments:
-        if not subjects_compatible(session_subject, item.get("subject")):
+        enroll_subject, enroll_batch = extract_subject_and_batch(item.get("subject"), item.get("batch"))
+        if not enroll_subject or not enroll_batch:
             continue
-        enroll_batch = item.get("batch") or student_batch
-        if not enroll_batch or not session_batch:
+        if not subjects_compatible(session_subject, enroll_subject):
+            continue
+        if _norm(session_batch) in {"all batches", "all", "*"}:
             return True
-        if batches_compatible(session_batch, enroll_batch) or is_all_batches(session_batch) or is_all_batches(enroll_batch):
+        if session_batch and batches_compatible(session_batch, enroll_batch):
             return True
     return False
 
@@ -713,10 +716,10 @@ def persist_student_roster(db, students: list[dict], stamp: Optional[str] = None
         batch = str(item.get("batch") or "").strip()
         phone = str(item.get("phone") or "").strip()
         roll = str(item.get("roll_no") or "").strip()
-        if not name and not email:
+        if not name and not email and not roll:
             continue
         if not name:
-            name = email.split("@")[0].replace(".", " ").title()
+            name = (email.split("@")[0] if email else roll).replace(".", " ").replace("-", " ").title()
         existing = find_ingested_student(db, email=email, name=name, roll_no=roll)
         student_id = (existing or {}).get("id") or roll or email or f"std-{name.lower().replace(' ', '-')}"
         if existing:
@@ -759,10 +762,10 @@ def persist_student_roster(db, students: list[dict], stamp: Optional[str] = None
             subject = _clean_subject_name(enrollment.get("subject") if isinstance(enrollment, dict) else enrollment)
             enroll_batch = ""
             if isinstance(enrollment, dict):
-                enroll_batch = str(enrollment.get("batch") or batch or "").strip()
+                enroll_batch = str(enrollment.get("batch") or "").strip()
             else:
-                enroll_batch = batch
-            if not subject:
+                enroll_batch = str(batch or "").strip()
+            if not subject or not enroll_batch:
                 continue
             for key in identity_keys(student_id, email, roll, name):
                 if not key or len(key) < 3:

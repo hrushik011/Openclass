@@ -43,7 +43,9 @@
     subjects: [],
     batchesBySubject: {},
     rosterStatus: null,
-    pendingTimetableFile: null
+    pendingTimetableFile: null,
+    enrollments: [],
+    todayClasses: []
   };
 
   function applyTheme() {
@@ -82,13 +84,35 @@
   function cleanSubjectName(raw) {
     if (!raw) return "";
     return String(raw)
+      .replace(/\s*[\(\[]\s*(?:batch\s*)?b?\s*\d+(?:\s*of\s*\d+)?\s*[\)\]]\s*$/i, "")
+      .replace(/\s*[-–]\s*(?:batch\s*)?b?\s*\d+(?:\s*of\s*\d+)?\s*$/i, "")
       .replace(/\s+(CS-[0-9][A-Z0-9]*|[A-Z]{2,3}-[0-9][A-Z0-9]*)$/i, "")
+      .replace(/^[\s\-]+|[\s\-]+$/g, "")
       .trim() || String(raw).trim();
+  }
+
+  function extractBatchFromLabel(raw) {
+    const text = String(raw || "");
+    const ofMatch = text.match(/\b(?:batch\s*|b\s*)?(\d+)\s*(?:of|\/)\s*\d+\b/i);
+    if (ofMatch) return `Batch ${ofMatch[1]}`;
+    const numbered = text.match(/\b(?:batch[\s\-]*|b[\s\-]*)(\d+)\b/i);
+    if (numbered) return `Batch ${numbered[1]}`;
+    return "";
+  }
+
+  function subjectsMatch(left, right) {
+    const a = cleanSubjectName(left).toLowerCase();
+    const b = cleanSubjectName(right).toLowerCase();
+    if (!a || !b) return false;
+    return a === b || a.includes(b) || b.includes(a);
   }
 
   function normalizeBatch(batchName) {
     const raw = String(batchName || "").trim().toLowerCase();
-    if (!raw || raw === "all batches" || raw === "all" || raw === "*") return "ALL";
+    if (!raw) return "";
+    if (raw === "all batches" || raw === "all" || raw === "*") return "ALL";
+    const ofMatch = raw.match(/\b(?:batch\s*|b\s*)?(\d+)\s*(?:of|\/)\s*\d+\b/i);
+    if (ofMatch) return `B${ofMatch[1]}`;
     const numbered = raw.match(/\b(?:batch[\s\-]*|b[\s\-]*)(\d+)\b/i);
     if (numbered) return `B${numbered[1]}`;
     const program = raw.match(/\b([a-z]{1,6})[\s\-]*(\d+)([a-z])?\b/i);
@@ -377,6 +401,8 @@
       state.attendanceRoster = null;
       state.studentAttendance = null;
       state.facultyAttendance = null;
+      state.enrollments = [];
+      state.todayClasses = [];
       state.threads = [];
       state.threadScopeFilter = "all";
       state.activeThread = null;
@@ -412,7 +438,7 @@
 
     studentId() {
       const user = state.user || {};
-      return user.id || user.roll_no || user.student_id || null;
+      return user.roll_no || user.roster_id || user.student_id || user.id || null;
     },
 
     async loadStudentAttendance() {
@@ -516,7 +542,7 @@
       if (!state.token) return;
       try {
         const isStudent = String(state.user?.role || "").toUpperCase() === "STUDENT";
-        const classUrl = isStudent ? "/api/student/timetable" : "/api/classes";
+        const classUrl = isStudent ? "/api/student/dashboard" : "/api/classes";
         const [clsRes, assignRes, batchRes, peopleRes, notesRes] = await Promise.all([
           fetch(classUrl, { headers: api.headers() }),
           fetch("/api/assignments", { headers: api.headers() }),
@@ -527,9 +553,18 @@
         if (clsRes.ok) {
           const payload = await clsRes.json();
           state.classes = Array.isArray(payload) ? payload : (payload.classes || payload.sessions || []);
-          if (!Array.isArray(payload) && payload.attendance) {
-            state.studentAttendance = payload.attendance;
+          if (!Array.isArray(payload)) {
+            if (Array.isArray(payload.enrollments)) state.enrollments = payload.enrollments;
+            if (Array.isArray(payload.today)) state.todayClasses = payload.today;
+            if (payload.attendance) state.studentAttendance = payload.attendance;
+            if (payload.student && state.user) {
+              if (payload.student.roll_no) state.user.roll_no = payload.student.roll_no;
+              if (payload.student.batch_id) state.user.batch_id = payload.student.batch_id;
+              if (payload.student.name) state.user.name = payload.student.name;
+              try { localStorage.setItem("openclass_user", JSON.stringify(state.user)); } catch (e) {}
+            }
           }
+          state.classes = enrolledSessions(state.classes);
         }
         if (assignRes.ok) state.assignments = assignmentsForViewer(await assignRes.json());
         if (batchRes.ok) state.batches = await batchRes.json();
@@ -1979,7 +2014,7 @@
             return `
               <div class="attendance-subject-row">
                 <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px;">
-                  <strong style="font-size: 13px;">${item.subject || "Course"}</strong>
+                  <strong style="font-size: 13px;">${item.subject || "Course"}${item.batch ? ` · ${item.batch}` : ""}</strong>
                   <span style="font-size: 9px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: ${colors.text}; background: ${colors.track}; border: 1px solid ${colors.fill}55; border-radius: 999px; padding: 3px 8px;">${colors.label}</span>
                 </div>
                 <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px;">
@@ -2005,7 +2040,7 @@
           <div>
             <div class="eyebrow">Student Portal · Attendance</div>
             <h1 class="hero-title">My Attendance.</h1>
-            <p class="hero-copy">Live subject-wise attendance for ${user.batch_id ? `batch ${user.batch_id}` : "your enrolled subjects"}. Green is 75% or higher, yellow is 50–74%, red is below 50%.</p>
+            <p class="hero-copy">Live subject-wise attendance for papers assigned to ${user.roll_no || user.name || "you"} only. Green is 75% or higher, yellow is 50–74%, red is below 50%.</p>
           </div>
         </div>
         ${renderStudentAttendanceCard()}
@@ -2129,26 +2164,59 @@
     return Boolean(session.class_date && String(session.class_date).slice(0, 10) === ymd);
   }
 
+  function msUntilKolkataMidnight() {
+    const now = kolkataNow();
+    const next = new Date(now);
+    next.setHours(24, 0, 0, 0);
+    return next.getTime() - now.getTime();
+  }
+
   function scheduleDayRollover() {
-    if (window.__ocDayWatch) return;
+    if (window.__ocDayArmed) return;
+    window.__ocDayArmed = true;
     window.__ocLastYmd = kolkataYmd();
-    window.__ocDayWatch = window.setInterval(async () => {
-      const ymd = kolkataYmd();
-      if (ymd !== window.__ocLastYmd) {
-        window.__ocLastYmd = ymd;
+    const roll = async () => {
+      window.__ocLastYmd = kolkataYmd();
+      if (state.token) {
         await api.loadDashboardData();
         render();
       }
-    }, 30000);
+    };
+    const armMidnight = () => {
+      const wait = Math.max(1500, msUntilKolkataMidnight() + 400);
+      window.__ocDayWatch = window.setTimeout(async () => {
+        await roll();
+        armMidnight();
+      }, wait);
+    };
+    armMidnight();
+  }
+
+  function enrolledSessions(list) {
+    const role = String((state.user && state.user.role) || "").toUpperCase();
+    const items = Array.isArray(list) ? list : [];
+    if (role !== "STUDENT") return items;
+    const enrollments = state.enrollments || [];
+    if (!enrollments.length) return items;
+    return items.filter((session) => enrollments.some((enr) => {
+      if (!subjectsMatch(session.subject, enr.subject)) return false;
+      const sessionBatch = session.batch || extractBatchFromLabel(session.subject);
+      if (normalizeBatch(sessionBatch) === "ALL") return true;
+      if (!enr.batch || !sessionBatch) return false;
+      return batchesMatch(sessionBatch, enr.batch);
+    }));
   }
 
   function todaysEnrolledClasses() {
-    return (state.classes || []).filter((item) => isClassToday(item));
+    const fromApi = enrolledSessions(state.todayClasses || []);
+    if (fromApi.length) return fromApi.filter((item) => isClassToday(item));
+    return enrolledSessions(state.classes || []).filter((item) => isClassToday(item));
   }
 
   function renderStudentDashboard() {
     const user = state.user || {};
-    const studentBatch = user.batch_id || "your batch";
+    const enrollments = state.enrollments || [];
+    const studentBatch = user.roll_no || user.batch_id || "your electives";
     const todayClasses = todaysEnrolledClasses();
     const upNext = todayClasses[0] || null;
     const allAssignments = state.assignments || [];
@@ -2161,9 +2229,11 @@
       <div class="student-view">
         <div class="hero-row">
           <div>
-            <div class="eyebrow">Student Portal · Batch ${studentBatch}</div>
+            <div class="eyebrow">Student Portal · ${user.roll_no ? `Roll ${user.roll_no}` : `Batch ${studentBatch}`}</div>
             <h1 class="hero-title">Good morning, <span class="accent">${user.name || "Student"}.</span></h1>
-            <p class="hero-copy">Your personalized learning space, arranged around lectures, submissions, and class notes.</p>
+            <p class="hero-copy">${enrollments.length
+        ? `Enrolled papers: ${enrollments.map((item) => `${item.subject}${item.batch ? " · " + item.batch : ""}`).join(", ")}.`
+        : "Your personalized learning space, arranged around lectures, submissions, and class notes."}</p>
           </div>
           <div class="date-note">
             Synced via <b>Microsoft 365 OIDC</b>
@@ -2191,8 +2261,8 @@
               </div>
             ` : `
               <div class="class-overline">Schedule</div>
-              <div class="class-title">No lectures mapped for ${studentBatch}</div>
-              <div class="class-sub">Once the university timetable is ingested, sessions for your batch appear here automatically.</div>
+              <div class="class-title">No enrolled lectures today</div>
+              <div class="class-sub">Today’s Rhythm only lists papers and batch groups assigned to you in the ingested roster.</div>
             `}
           </div>
 
@@ -2247,7 +2317,7 @@
                     </div>
                     ${i === 0 ? `<span class="status-pill">NEXT</span>` : ""}
                   </div>
-                `).join("") : `<p style="font-size: 11px; color: var(--oc-muted); padding: 8px 4px;">No enrolled lectures today for ${studentBatch}.</p>`}
+                `).join("") : `<p style="font-size: 11px; color: var(--oc-muted); padding: 8px 4px;">No enrolled lectures today. The grid rolls over at midnight IST.</p>`}
               </div>
             </section>
           </div>
@@ -2493,7 +2563,7 @@
 
   function renderTimetableView() {
     const isFaculty = state.role === "faculty";
-    const classes = state.classes || [];
+    const classes = isFaculty ? (state.classes || []) : enrolledSessions(state.classes || []);
     const weekDays = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
     const times = weeklyTimetableTimes(classes);
     const todayName = kolkataWeekday();

@@ -83,6 +83,7 @@ from .services.roster import (
     student_enrollments,
     list_student_class_sessions,
     find_ingested_student,
+    subjects_compatible,
     _session_exists,
 )
 from .timetable_parser import parse_batch_allocation, parse_student_roster, parse_timetable
@@ -1354,18 +1355,41 @@ def get_student_attendance(
         lookup_ids = {str(student_id)}
         if student:
             lookup_ids.add(str(student["id"]))
-        placeholders = ",".join("?" for _ in lookup_ids)
+            if student.get("email"):
+                lookup_ids.add(str(student["email"]))
+        if current_user:
+            if current_user.get("id") is not None:
+                lookup_ids.add(str(current_user.get("id")))
+            if current_user.get("email"):
+                lookup_ids.add(str(current_user.get("email")))
+            if current_user.get("roll_no"):
+                lookup_ids.add(str(current_user.get("roll_no")))
+        lookup_ids = {k for k in lookup_ids if k and k != "None"}
+        placeholders = ",".join("?" for _ in lookup_ids) or "?"
         records = db.execute(
             f"SELECT * FROM attendance_records WHERE student_id IN ({placeholders})",
-            tuple(lookup_ids),
+            tuple(lookup_ids or [student_id]),
         ).fetchall()
         record_map = {r["class_id"]: dict(r) for r in records}
 
         subject_map = {}
+        for item in enrollments:
+            clean_name = _clean_subject_name(item.get("subject"))
+            if clean_name:
+                subject_map.setdefault(clean_name, {"attended": 0, "total": 0, "live_sessions": 0, "batch": item.get("batch")})
+
+        def _subject_bucket(name: str) -> Optional[str]:
+            cleaned = _clean_subject_name(name or "General")
+            for existing in list(subject_map):
+                if subjects_compatible(existing, cleaned):
+                    return existing
+            return cleaned if not enrollments else None
 
         for s in sessions:
             s_dict = dict(s)
-            clean_name = _clean_subject_name(s_dict.get("subject", "General"))
+            clean_name = _subject_bucket(s_dict.get("subject", "General"))
+            if not clean_name:
+                continue
             if clean_name not in subject_map:
                 subject_map[clean_name] = {"attended": 0, "total": 0, "live_sessions": 0}
 
@@ -1380,7 +1404,9 @@ def get_student_attendance(
             class_id = r_dict.get("class_id")
             if any(s.get("id") == class_id or str(s.get("id")) == str(class_id) for s in sessions):
                 continue
-            clean_name = _clean_subject_name(r_dict.get("subject", "General"))
+            clean_name = _subject_bucket(r_dict.get("subject", "General"))
+            if not clean_name:
+                continue
             if not session_visible_to_user({"subject": clean_name, "batch": r_dict.get("batch_id") or batch_id}, scope_user, enrollments):
                 continue
             if clean_name not in subject_map:
@@ -1395,8 +1421,8 @@ def get_student_attendance(
         tot_held = 0
         for subj_name, stats in subject_map.items():
             att = stats["attended"]
-            tot = max(stats["total"], 1)
-            pct = round((att / tot) * 100, 1)
+            tot = stats["total"]
+            pct = round((att / tot) * 100, 1) if tot else 0.0
             tot_att += att
             tot_held += tot
             subjects_out.append({
@@ -1404,6 +1430,7 @@ def get_student_attendance(
                 "attended": att,
                 "total": tot,
                 "percentage": pct,
+                "batch": stats.get("batch") or "",
                 "status": "Eligible" if pct >= 75 else ("Warning" if pct >= 50 else "Shortage"),
             })
 
@@ -1416,6 +1443,7 @@ def get_student_attendance(
             "overall_percentage": overall_pct,
             "total_attended": tot_att,
             "total_classes": tot_held,
+            "enrollments": enrollments,
             "subjects": subjects_out,
         }
 

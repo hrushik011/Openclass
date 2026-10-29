@@ -79,6 +79,7 @@ SKIP_SUBJECT_HEADERS = {
     "sr", "sr no", "s no", "serial", "gender", "sex", "dob", "date of birth",
     "address", "city", "state", "program", "programme", "degree", "year",
     "semester", "status", "remarks", "comment", "father", "mother", "guardian",
+    "attendance", "percentage", "percent", "marks", "score", "grade",
 }
 
 
@@ -161,10 +162,15 @@ def _row_enrollments(header_map: dict, cells: list, default_batch: str) -> list[
         header_title = col_titles.get(col_idx) or ""
         cell_text = str(value).strip()
         _, header_batch = parse_elective_header(header_title)
-        if _looks_like_batch(cell_text) and cell_text.lower() not in {"yes", "y", "1", "true", "enrolled"}:
+        cell_subject, cell_batch = parse_elective_header(cell_text)
+        if cell_batch and cell_subject and cell_subject.lower() not in {"yes", "y", "true", "enrolled"}:
+            add_enroll(cell_subject, cell_batch)
+        elif _looks_like_batch(cell_text) and cell_text.lower() not in {"yes", "y", "1", "true", "enrolled"}:
             add_enroll(header_title, cell_text)
-        else:
-            add_enroll(header_title or cell_text, header_batch or default_batch)
+        elif header_batch:
+            add_enroll(header_title, header_batch)
+        elif default_batch and cell_text.lower() in {"yes", "y", "1", "true", "enrolled"}:
+            add_enroll(header_title or cell_text, default_batch)
     return enrollments
 
 
@@ -195,7 +201,7 @@ def _map_student_headers(cells) -> dict:
         elif key in PHONE_HEADERS:
             mapping.setdefault("phone", idx)
             identity_idxs.add(idx)
-        elif key in ROLL_HEADERS:
+        elif key in ROLL_HEADERS or "roll" in key.split() or key in {"prn", "prn no"} or key.endswith(" prn"):
             mapping.setdefault("roll_no", idx)
             identity_idxs.add(idx)
         elif key in SUBJECT_HEADERS or "subject" in key or "course" in key:
@@ -206,7 +212,7 @@ def _map_student_headers(cells) -> dict:
     mapping["subject_cols"] = subject_cols
     mapping["col_titles"] = col_titles
     mapping["identity_idxs"] = identity_idxs
-    return mapping if "name" in mapping or "email" in mapping else {}
+    return mapping if "name" in mapping or "email" in mapping or "roll_no" in mapping else {}
 
 
 def parse_student_roster(path) -> list[dict]:
@@ -240,15 +246,16 @@ def parse_student_roster(path) -> list[dict]:
             name = cell("name")
             email = cell("email").lower()
             batch = cell("batch")
-            if not name and not email:
+            roll_no = _extract_roll(cells, header_map)
+            if not name and not email and not roll_no:
                 continue
-            identity = email or name.lower()
+            identity = email or (roll_no.lower() if roll_no else "") or name.lower()
             person = by_identity.setdefault(identity, {
                 "name": name,
                 "email": email,
                 "batch": batch,
                 "phone": cell("phone"),
-                "roll_no": _extract_roll(cells, header_map),
+                "roll_no": roll_no,
                 "sheet": ws.title,
                 "enrollments": [],
             })
@@ -296,7 +303,8 @@ def parse_batch_allocation(path) -> list[dict]:
             email = cell("email").lower()
             batch = cell("batch")
             subject = cell("subject")
-            if not name and not email:
+            roll_no = _extract_roll(cells, header_map)
+            if not name and not email and not roll_no:
                 continue
             enrollments = _row_enrollments(header_map, cells, batch)
             if not enrollments and (subject or batch):
@@ -306,7 +314,7 @@ def parse_batch_allocation(path) -> list[dict]:
                 "email": email,
                 "batch": batch,
                 "phone": "",
-                "roll_no": _extract_roll(cells, header_map),
+                "roll_no": roll_no,
                 "sheet": ws.title,
                 "enrollments": enrollments,
                 "subject": subject,
