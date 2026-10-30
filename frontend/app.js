@@ -142,8 +142,16 @@
     const items = Array.isArray(list) ? list : [];
     const role = String((state.user && state.user.role) || "").toUpperCase();
     if (role !== "STUDENT") return items;
-    const batch = state.user && state.user.batch_id;
-    return items.filter((item) => batchesMatch(item && item.batch_id, batch));
+    const enrollments = state.enrollments || [];
+    if (!enrollments.length) return items;
+    return items.filter((item) => enrollments.some((enr) => {
+      const subjectOk = !item.subject || subjectsMatch(item.subject, enr.subject) || subjectsMatch(item.subject, enr.raw);
+      const batchOk = !item.batch_id || normalizeBatch(item.batch_id) === "ALL"
+        || batchesMatch(item.batch_id, enr.batch)
+        || batchesMatch(item.batch_id, enr.subject)
+        || batchesMatch(item.batch_id, enr.raw);
+      return subjectOk && batchOk;
+    }));
   }
 
   function uniqueSubjectList(items = []) {
@@ -2198,15 +2206,15 @@
     if (role !== "STUDENT") return items;
     const enrollments = state.enrollments || [];
     if (!enrollments.length) return items;
-    const filtered = items.filter((session) => enrollments.some((enr) => {
-      const subjectHit = subjectsMatch(session.subject, enr.subject) || subjectsMatch(session.subject, enr.raw);
+    return items.filter((session) => enrollments.some((enr) => {
+      if (!subjectsMatch(session.subject, enr.subject) && !subjectsMatch(session.subject, enr.raw)) {
+        return false;
+      }
       const sessionBatch = session.batch || extractBatchFromLabel(session.subject);
-      const batchHit = !enr.batch || !sessionBatch || normalizeBatch(sessionBatch) === "ALL"
-        || batchesMatch(sessionBatch, enr.batch)
-        || batchesMatch(session.subject, enr.batch);
-      return subjectHit && batchHit;
+      if (!enr.batch) return Boolean(sessionBatch);
+      if (!sessionBatch || normalizeBatch(sessionBatch) === "ALL") return true;
+      return batchesMatch(sessionBatch, enr.batch) || batchesMatch(session.subject, enr.batch);
     }));
-    return filtered.length ? filtered : items;
   }
 
   function todaysEnrolledClasses() {
@@ -2217,7 +2225,6 @@
 
   function renderStudentDashboard() {
     const user = state.user || {};
-    const enrollments = state.enrollments || [];
     const studentBatch = user.roll_no || user.batch_id || "your electives";
     const todayClasses = todaysEnrolledClasses();
     const upNext = todayClasses[0] || null;
@@ -2231,11 +2238,9 @@
       <div class="student-view">
         <div class="hero-row">
           <div>
-            <div class="eyebrow">Student Portal · ${user.roll_no ? `Roll ${user.roll_no}` : `Batch ${studentBatch}`}</div>
+            <div class="eyebrow">Student Portal</div>
             <h1 class="hero-title">Good morning, <span class="accent">${user.name || "Student"}.</span></h1>
-            <p class="hero-copy">${enrollments.length
-        ? `Enrolled papers: ${enrollments.map((item) => `${item.subject}${item.batch ? " · " + item.batch : ""}`).join(", ")}.`
-        : "Your personalized learning space, arranged around lectures, submissions, and class notes."}</p>
+            <p class="hero-copy">Your personalized learning space, arranged around lectures, submissions, and class notes.</p>
           </div>
           <div class="date-note">
             Synced via <b>Microsoft 365 OIDC</b>

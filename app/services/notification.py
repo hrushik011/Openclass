@@ -60,7 +60,7 @@ class NotificationService:
 
         allowlist = TEST_RECIPIENT_ALLOWLIST
         if allowlist and recipient.lower() not in allowlist:
-            logger.info("Skipping %s — not on TEST_RECIPIENT_ALLOWLIST", recipient)
+            logger.warning("Skipping %s — not on TEST_RECIPIENT_ALLOWLIST", recipient)
             _log_delivery("email", "smtp_dispatch", "skipped_allowlist", f"To: {recipient} | Subject: {subject}")
             return False
 
@@ -135,9 +135,15 @@ class NotificationService:
             _log_delivery("email", "assignment_broadcast", "no_recipients", f"{title} · {batch_id}")
             return 0
         for row in recipients:
-            email = (row or {}).get("email")
-            if email and cls.send_email(email, email_subject, email_body):
+            email = ((row or {}).get("email") or "").strip()
+            if not email:
+                logger.warning("Skipping roster row without email for assignment '%s': %s", title, row)
+                _log_delivery("email", "assignment_broadcast", "missing_email", f"{title} · {row}")
+                continue
+            if cls.send_email(email, email_subject, email_body):
                 sent += 1
+            else:
+                logger.warning("Assignment email was not delivered to %s for '%s'", email, title)
         logger.info("Assignment broadcast '%s' emailed %s/%s recipients", title, sent, len(recipients))
         return sent
 

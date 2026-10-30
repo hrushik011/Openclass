@@ -1107,25 +1107,33 @@ async def create_assignment(
         assignment_file=assignment_file,
     )
 
-    target_students = recipients_for_subject_batch(subject or "", batch_id)
-    if not target_students:
-        target_students = list_recipient_students(subject=None, batch_id=batch_id)
-    logger.info(
-        "Assignment %s targeting %s / %s resolved %s roster emails",
-        created.get("id"),
-        subject,
-        batch_id,
-        len(target_students),
-    )
-
     def dispatch_assignment_announcement():
         try:
-            sent = NotificationService.broadcast_assignment_created(created, target_students)
-            logger.info("Assignment %s notified %s students", created.get("id"), sent)
+            recipients = list_recipient_students(created.get("subject"), created.get("batch_id"))
+            if not recipients:
+                recipients = list_recipient_students(subject=None, batch_id=created.get("batch_id"))
+            emails = [row.get("email") for row in recipients if row.get("email")]
+            logger.info(
+                "Assignment %s email loop subject=%r batch=%r recipients=%s",
+                created.get("id"),
+                created.get("subject"),
+                created.get("batch_id"),
+                emails,
+            )
+            if not emails:
+                print(
+                    f"Assignment email dispatch found 0 roster emails for "
+                    f"subject={created.get('subject')!r} batch={created.get('batch_id')!r}",
+                    flush=True,
+                )
+            sent = NotificationService.broadcast_assignment_created(created, recipients)
+            logger.info("Assignment %s notified %s/%s students", created.get("id"), sent, len(recipients))
         except Exception as exc:
             logger.exception("Assignment email dispatch failed: %s", exc)
+            print(f"Assignment email dispatch failed: {exc}", flush=True)
 
     background_tasks.add_task(dispatch_assignment_announcement)
+    target_students = list_recipient_students(subject or "", batch_id)
 
     created["submission_count"] = 0
     created["total_students"] = len(target_students)

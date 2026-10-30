@@ -289,12 +289,7 @@ def batches_compatible(left: Optional[str], right: Optional[str]) -> bool:
         return True
     left_tokens = batch_tokens(left)
     right_tokens = batch_tokens(right)
-    if left_tokens and right_tokens and left_tokens & right_tokens:
-        return True
-    la, lb = _norm(left), _norm(right)
-    if la and lb and len(la) >= 2 and len(lb) >= 2 and (la in lb or lb in la):
-        return True
-    return False
+    return bool(left_tokens and right_tokens and (left_tokens & right_tokens))
 
 
 def subjects_compatible(left: Optional[str], right: Optional[str]) -> bool:
@@ -534,7 +529,7 @@ def student_enrollments(user: Optional[dict]) -> list[dict]:
             logger.warning(message)
         for item in matched_rows:
             subject, batch = extract_subject_and_batch(item.get("subject"), item.get("batch"))
-            if not subject:
+            if not subject or not batch:
                 continue
             marker = (subject.lower(), normalize_batch(batch) or "")
             if marker in seen:
@@ -553,27 +548,6 @@ def list_student_class_sessions(user: Optional[dict], sessions: Optional[list[di
         ).fetchall()]
         all_sessions = [dict(r) if not isinstance(r, dict) else r for r in rows]
     matched = [row for row in all_sessions if enrollment_matches_session(row, user, enrollments)]
-    if not matched and enrollments:
-        enrolled_subjects = [item.get("subject") for item in enrollments]
-        enrolled_batches = [item.get("batch") for item in enrollments if item.get("batch")]
-        matched = [
-            row for row in all_sessions
-            if any(subjects_compatible(row.get("subject"), subject) for subject in enrolled_subjects)
-            and (
-                not enrolled_batches
-                or any(
-                    batches_compatible(row.get("batch") or row.get("subject"), batch)
-                    for batch in enrolled_batches
-                )
-                or not str(row.get("batch") or "").strip()
-            )
-        ]
-    if not matched and enrollments:
-        enrolled_subjects = [item.get("subject") for item in enrollments]
-        matched = [
-            row for row in all_sessions
-            if any(subjects_compatible(row.get("subject"), subject) for subject in enrolled_subjects)
-        ]
     if not matched and enrollments:
         subjects = sorted({(s.get("subject"), s.get("batch")) for s in all_sessions})
         message = (
@@ -604,27 +578,17 @@ def enrollment_matches_session(session: dict, user: Optional[dict], enrollments:
         return False
     session_subject, session_batch = extract_subject_and_batch(session.get("subject"), session.get("batch"))
     session_label = f"{session.get('subject') or ''} {session.get('batch') or ''}"
-    enrolled_batches = [item.get("batch") for item in enrollments if item.get("batch")]
     for item in enrollments:
-        enroll_subject, enroll_batch = extract_subject_and_batch(item.get("subject"), item.get("batch"))
+        enroll_subject, enroll_batch = extract_subject_and_batch(item.get("subject"), item.get("batch") or item.get("raw"))
         if not enroll_subject:
             continue
         if not subjects_compatible(session_subject, enroll_subject) and not subjects_compatible(session_label, enroll_subject):
             continue
         if _norm(session_batch) in {"all batches", "all", "*"}:
             return True
-        if not session_batch and not enroll_batch:
-            return True
         if enroll_batch and (
             batches_compatible(session_batch, enroll_batch)
             or batches_compatible(session_label, enroll_batch)
-        ):
-            return True
-        if not enroll_batch:
-            return True
-        if enrolled_batches and any(
-            batches_compatible(session_batch, tag) or batches_compatible(session_label, tag)
-            for tag in enrolled_batches
         ):
             return True
     return False
@@ -660,12 +624,11 @@ def assignment_visible_to_student(assignment: dict, user: Optional[dict]) -> boo
             and (
                 is_all_batches(batch)
                 or batches_compatible(batch, item.get("batch"))
-                or batches_compatible(batch, item.get("subject"))
                 or batches_compatible(batch, item.get("raw"))
             )
             for item in enrollments
         )
-    return batches_compatible(assignment.get("batch_id"), user.get("batch_id"))
+    return False
 
 
 def note_visible_to_student(note: dict, user: Optional[dict]) -> bool:
