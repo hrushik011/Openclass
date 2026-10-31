@@ -27,7 +27,7 @@ def _row_time_range(row):
         blob_parts.append(text)
         match = TIME.search(text.replace(".", ":") if ":" not in text else text) or TIME.search(text)
         if match:
-            return clock(match.group(1), match.group(2)), clock(match.group(3), match.group(4)), idx
+            return clock(match.group(1)), clock(match.group(2)), idx
     blob = " ".join(blob_parts)
     match = TIME.search(blob.replace(".", ":"))
     if match:
