@@ -536,7 +536,7 @@ def student_enrollments(user: Optional[dict]) -> list[dict]:
             logger.warning(message)
         for item in matched_rows:
             subject, batch = extract_subject_and_batch(item.get("subject"), item.get("batch"))
-            if not subject or not batch:
+            if not subject:
                 continue
             marker = (subject.lower(), normalize_batch(batch) or "")
             if marker in seen:
@@ -593,10 +593,9 @@ def enrollment_matches_session(session: dict, user: Optional[dict], enrollments:
             continue
         if _norm(session_batch) in {"all batches", "all", "*"}:
             return True
-        if enroll_batch and (
-            batches_compatible(session_batch, enroll_batch)
-            or batches_compatible(session_label, enroll_batch)
-        ):
+        if not session_batch or not enroll_batch:
+            return True
+        if batches_compatible(session_batch, enroll_batch) or batches_compatible(session_label, enroll_batch):
             return True
     return False
 
@@ -630,6 +629,7 @@ def assignment_visible_to_student(assignment: dict, user: Optional[dict]) -> boo
             (not subject or subjects_compatible(subject, item.get("subject")) or subjects_compatible(subject, item.get("raw")))
             and (
                 is_all_batches(batch)
+                or not str(item.get("batch") or "").strip()
                 or batches_compatible(batch, item.get("batch"))
                 or batches_compatible(batch, item.get("raw"))
             )
@@ -751,6 +751,13 @@ def identity_keys(*values: Optional[str]) -> set[str]:
         compact = compact_identity(text)
         if compact:
             keys.add(compact)
+            dm = re.search(r"(dm\d{5,})", compact)
+            if dm:
+                keys.add(dm.group(1))
+            digits = re.sub(r"\D", "", compact)
+            if len(digits) >= 6:
+                keys.add(digits)
+                keys.add(digits[-7:])
         roll = extract_roll_token(text)
         if roll:
             keys.add(roll)
@@ -913,6 +920,28 @@ def apply_ingested_student_profile(db, user: dict) -> dict:
         roll_no=str(user.get("roll_no") or user.get("id") or ""),
         log_miss=False,
     )
+    try:
+        from ..timetable_engine import resolve_student
+        engine = resolve_student(
+            roll_no=str(user.get("roll_no") or (match or {}).get("id") or ""),
+            email=user.get("email"),
+            name=user.get("name"),
+        )
+        if engine:
+            if engine.get("name"):
+                user["name"] = engine["name"]
+            if engine.get("roll_no"):
+                user["roll_no"] = engine["roll_no"]
+                user["roster_id"] = engine["roll_no"]
+            if not match:
+                match = {
+                    "id": engine.get("roll_no"),
+                    "name": engine.get("name"),
+                    "email": engine.get("email"),
+                    "batch_id": user.get("batch_id"),
+                }
+    except Exception:
+        pass
     if not match:
         return user
     batch = (match.get("batch_id") or "").strip()

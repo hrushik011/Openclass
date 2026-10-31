@@ -46,7 +46,8 @@
     pendingTimetableFile: null,
     pendingMasterFile: null,
     enrollments: [],
-    todayClasses: []
+    todayClasses: [],
+    assignmentFilter: "all"
   };
 
   function applyTheme() {
@@ -1648,6 +1649,7 @@
             <div class="reducto-brand">
               ${renderOpenclassLogo(40)}
               <span class="reducto-brand-name">Openclass</span>
+              ${!isFaculty ? `<span class="topbar-greeting">${personalizedGreeting(user)}</span>` : ""}
             </div>
 
             <div class="top-actions">
@@ -2051,7 +2053,7 @@
           <div>
             <div class="eyebrow">Student Portal · Attendance</div>
             <h1 class="hero-title">My Attendance.</h1>
-            <p class="hero-copy">Live subject-wise attendance for papers assigned to ${user.roll_no || user.name || "you"} only. Green is 75% or higher, yellow is 50–74%, red is below 50%.</p>
+            <p class="hero-copy">Live subject-wise attendance for papers assigned to you. Green is 75% or higher, yellow is 50–74%, red is below 50%.</p>
           </div>
         </div>
         ${renderStudentAttendanceCard()}
@@ -2150,6 +2152,23 @@
   }
 
   // --- 4. Student Dashboard ---
+  function studentDisplayName(user) {
+    const raw = String((user && user.name) || "").trim();
+    if (!raw || /^(imdr|dm)?\d/i.test(raw) || /roll/i.test(raw)) return "Student";
+    return raw.split(/\s+/)[0];
+  }
+
+  function timeOfDayGreeting() {
+    const hour = kolkataNow().getHours();
+    if (hour >= 4 && hour < 12) return "Good morning";
+    if (hour >= 12 && hour < 17) return "Good afternoon";
+    return "Good evening";
+  }
+
+  function personalizedGreeting(user) {
+    return `${timeOfDayGreeting()}, ${studentDisplayName(user)}`;
+  }
+
   function kolkataNow() {
     return new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
   }
@@ -2242,7 +2261,7 @@
         <div class="hero-row">
           <div>
             <div class="eyebrow">Student Portal</div>
-            <h1 class="hero-title">Good morning, <span class="accent">${user.name || "Student"}.</span></h1>
+            <h1 class="hero-title">${timeOfDayGreeting()}, <span class="accent">${studentDisplayName(user)}.</span></h1>
             <p class="hero-copy">Your personalized learning space, arranged around lectures, submissions, and class notes.</p>
           </div>
           <div class="date-note">
@@ -2443,9 +2462,44 @@
   }
 
   // --- 5. Interactive Assignment Portal View (Role-Adaptive) ---
+  function assignmentCreatedMs(item) {
+    const stamp = Date.parse(item && (item.created_at || item.updated_at || item.deadline) || "");
+    return Number.isFinite(stamp) ? stamp : 0;
+  }
+
+  function isAssignmentUrgent(item) {
+    if (!item || item.has_submitted) return false;
+    const hours = Number(item.hours_remaining);
+    return Number.isFinite(hours) && hours >= 0 && hours <= 48;
+  }
+
+  function isAssignmentNew(item) {
+    const created = assignmentCreatedMs(item);
+    return created > 0 && (Date.now() - created) <= 72 * 60 * 60 * 1000;
+  }
+
+  function filteredAssignments(list) {
+    const items = Array.isArray(list) ? list.slice() : [];
+    const mode = String(state.assignmentFilter || "all").toLowerCase();
+    if (mode === "urgent") {
+      return items.filter(isAssignmentUrgent).sort((a, b) => Number(a.hours_remaining || 0) - Number(b.hours_remaining || 0));
+    }
+    if (mode === "latest") {
+      return items.sort((a, b) => assignmentCreatedMs(b) - assignmentCreatedMs(a));
+    }
+    return items;
+  }
+
   function renderAssignmentsView() {
+    ensureNotesFilterStyles();
     const isFaculty = state.role === "faculty";
-    const assignments = state.assignments || [];
+    const filter = String(state.assignmentFilter || "all").toLowerCase();
+    const assignments = filteredAssignments(state.assignments || []);
+    const filterPills = [
+      { id: "all", label: "All" },
+      { id: "urgent", label: "Urgent" },
+      { id: "latest", label: "Latest Added" }
+    ];
 
     return `
       <div class="assignments-view">
@@ -2455,23 +2509,28 @@
             <h1 class="hero-title">${isFaculty ? "Assignments & Submissions." : "Your Course Assignments."}</h1>
             <p class="hero-copy">${isFaculty
         ? "Create portals, edit or extend deadlines dynamically, and inspect student submissions."
-        : `Active assignments for your enrolled subjects and batches${state.user?.batch_id ? ` (${state.user.batch_id})` : ""}, including All Batches posts.`}</p>
+        : "Active assignments for your enrolled subjects and batches, including All Batches posts."}</p>
           </div>
           <div>
             ${isFaculty ? `
               <button class="primary-btn" id="btn-create-assignment-view">
                 ${getIcon("plus", 14)} Create Assignment 
               </button>
-            ` : `
-              <div class="date-note">Enrolled Batch: <b>${state.user?.batch_id || "From roster"}</b></div>
-            `}
+            ` : ""}
           </div>
+        </div>
+
+        <div id="assignment-filter-pills" role="tablist" aria-label="Filter assignments" style="display: flex; gap: 8px; flex-wrap: wrap; margin: 6px 0 14px;">
+          ${filterPills.map((pill) => `
+            <button type="button" class="notes-subject-pill${filter === pill.id ? " active" : ""}" data-assignment-filter="${pill.id}">${pill.label}</button>
+          `).join("")}
         </div>
 
         <div class="assignment-list">
           ${assignments.length > 0 ? assignments.map((a) => {
           const hasSubmitted = Boolean(a.has_submitted);
-          const isUrgent = a.hours_remaining && a.hours_remaining <= 24 && !hasSubmitted;
+          const isUrgent = isAssignmentUrgent(a);
+          const isNew = isAssignmentNew(a);
 
           return `
               <div class="assignment-card">
@@ -2487,7 +2546,9 @@
                     </div>
                   </div>
 
-                  <div>
+                  <div style="display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end;">
+                    ${isNew ? `<span class="deadline-badge" style="background: rgba(124,58,237,0.14); color: #7c3aed;">New</span>` : ""}
+                    ${isUrgent && !hasSubmitted ? `<span class="deadline-badge deadline-urgent">Urgent</span>` : ""}
                     ${hasSubmitted ? `
                       <span class="deadline-badge deadline-submitted">${getIcon("check", 12)} Submitted</span>
                     ` : isUrgent ? `
@@ -3458,6 +3519,16 @@
 
     const btnCreateAssignView = document.getElementById("btn-create-assignment-view");
     if (btnCreateAssignView) btnCreateAssignView.addEventListener("click", () => openAssignmentCreate());
+
+    const assignmentFilters = document.getElementById("assignment-filter-pills");
+    if (assignmentFilters) {
+      assignmentFilters.addEventListener("click", (event) => {
+        const btn = event.target.closest("[data-assignment-filter]");
+        if (!btn) return;
+        state.assignmentFilter = btn.getAttribute("data-assignment-filter") || "all";
+        render();
+      });
+    }
 
     const btnManageBatches = document.getElementById("btn-manage-batches");
     if (btnManageBatches) btnManageBatches.addEventListener("click", () => { state.activeModal = "manage_batches"; render(); });

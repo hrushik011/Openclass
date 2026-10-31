@@ -3,23 +3,43 @@ from dataclasses import dataclass
 
 from openpyxl import load_workbook
 
-TIME=re.compile(r"^\s*(\d{1,2}(?::\d{2})?)\s*(?:-|–|to)\s*(\d{1,2}(?::\d{2})?)\s*$",re.IGNORECASE)
+TIME=re.compile(r"(\d{1,2})[:.](\d{2})\s*(?:a\.?m\.?|p\.?m\.?)?\s*(?:-|–|—|to)\s*(\d{1,2})[:.](\d{2})",re.IGNORECASE)
 ENTRY=re.compile(r"^\s*\d+\)\s*(.+?)\s*$")
 BATCH=re.compile(r"(?:-|–)?\s*(?:Batch|B)\s*(\d+)(?:\s*of\s*\d+)?\s*$",re.IGNORECASE)
 DAYS=["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"]
 @dataclass
 class ParsedClass: weekday:str; start_time:str; end_time:str; subject:str; batch:str|None; faculty_name:str|None
-def clock(value): value=value.strip(); return value if ":" in value else f"{value}:00"
+def clock(hour, minute="00"):
+    try:
+        hour_n = int(str(hour).strip()); minute_n = int(str(minute).strip())
+    except ValueError:
+        value = str(hour).strip(); return value if ":" in value else f"{value}:00"
+    if 1 <= hour_n <= 6:
+        hour_n += 12
+    return f"{hour_n:02d}:{minute_n:02d}"
+
+def _row_time_range(row):
+    cells = list(row or [])
+    blob_parts = []
+    for idx, value in enumerate(cells[:4]):
+        text = str(value or "").strip().replace("\u00a0", " ").replace("−", "-").replace("–", "-").replace("—", "-")
+        blob_parts.append(text)
+        match = TIME.search(text.replace(".", ":") if ":" not in text else text) or TIME.search(text)
+        if match:
+            return clock(match.group(1), match.group(2)), clock(match.group(3), match.group(4)), idx
+    blob = " ".join(blob_parts)
+    match = TIME.search(blob.replace(".", ":"))
+    if match:
+        return clock(match.group(1), match.group(2)), clock(match.group(3), match.group(4)), 0
+    return None
 
 def _parse_timetable_sheet(ws):
     classes = []
     for row in ws.iter_rows(values_only=True):
-        time_col = next((i for i, v in enumerate(row[:2]) if TIME.match(str(v or '').replace('.', ':').strip())), None)
-        if time_col is None:
+        parsed = _row_time_range(row)
+        if parsed is None:
             continue
-        match = TIME.match(str(row[time_col]).replace('.', ':').strip())
-        if match is None:
-            continue
+        start_time, end_time, time_col = parsed
         for day, cell in zip(DAYS, row[time_col+1:time_col+7]):
             lines = [x.strip() for x in str(cell or '').splitlines() if x.strip()]
             for i, line in enumerate(lines):
@@ -29,8 +49,6 @@ def _parse_timetable_sheet(ws):
                 course = entry.group(1)
                 batch = BATCH.search(course)
                 faculty = lines[i+1] if i+1 < len(lines) and not ENTRY.match(lines[i+1]) else None
-                start_time = clock(match.group(1))
-                end_time = clock(match.group(2))
                 subject_name = BATCH.sub('', course).strip()
                 batch_name = f"Batch {batch.group(1)}" if batch is not None else None
                 classes.append(ParsedClass(

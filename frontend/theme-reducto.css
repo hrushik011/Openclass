@@ -342,6 +342,15 @@ html[data-theme="dark"] .oc-logo-mark {
   color: #0f172a;
 }
 
+.topbar-greeting {
+  margin-left: 8px;
+  font-family: "Manrope", sans-serif;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--oc-muted, #64748b);
+  white-space: nowrap;
+}
+
 html[data-theme="dark"] .reducto-brand-name {
   color: #f8fafc;
 }

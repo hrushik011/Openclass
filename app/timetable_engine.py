@@ -35,9 +35,10 @@ TIMEZONE = ZoneInfo("Asia/Kolkata")
 DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
 
 TIME_RE = re.compile(
-    r"^\s*(\d{1,2}(?:[:.]\d{2})?)\s*(?:-|–|to)\s*(\d{1,2}(?:[:.]\d{2})?)\s*$",
+    r"(\d{1,2})[:.](\d{2})\s*(?:a\.?m\.?|p\.?m\.?)?\s*(?:-|–|—|to)\s*(\d{1,2})[:.](\d{2})",
     re.IGNORECASE,
 )
+SINGLE_TIME_RE = re.compile(r"^(\d{1,2})[:.](\d{2})(?:\s*(?:a\.?m\.?|p\.?m\.?))?$", re.IGNORECASE)
 ENTRY_RE = re.compile(r"^\s*\d+\)\s*(.+?)\s*$")
 BATCH_RE = re.compile(r"(?:-|–)?\s*(?:Batch|B)\s*(\d+)(?:\s*of\s*\d+)?\s*$", re.IGNORECASE)
 ELECTIVE_HEADER_RE = re.compile(
@@ -69,9 +70,45 @@ def _compact(value: Optional[str]) -> str:
     return re.sub(r"[^a-z0-9]", "", str(value or "").strip().lower())
 
 
-def _clock(value: str) -> str:
-    value = str(value or "").strip().replace(".", ":")
-    return value if ":" in value else f"{value}:00"
+def _clock(hour: int | str, minute: int | str = "00") -> str:
+    try:
+        hour_n = int(str(hour).strip())
+        minute_n = int(str(minute).strip())
+    except ValueError:
+        return f"{hour}:{minute}"
+    if 1 <= hour_n <= 6:
+        hour_n += 12
+    return f"{hour_n:02d}:{minute_n:02d}"
+
+
+def _cell_as_text(value) -> str:
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return ""
+    if hasattr(value, "hour"):
+        return f"{int(value.hour):02d}:{int(getattr(value, 'minute', 0)):02d}"
+    text = str(value).strip().replace("\u00a0", " ")
+    text = text.replace("−", "-").replace("–", "-").replace("—", "-")
+    return re.sub(r"\s+", " ", text)
+
+
+def _parse_time_range(*values) -> tuple[str, str] | None:
+    blob = " ".join(_cell_as_text(v) for v in values if _cell_as_text(v))
+    if not blob:
+        return None
+    match = TIME_RE.search(blob.replace(".", ":") if ":" not in blob else blob)
+    if not match:
+        match = TIME_RE.search(blob)
+    if match:
+        return _clock(match.group(1), match.group(2)), _clock(match.group(3), match.group(4))
+    parts = [_cell_as_text(v).replace(".", ":") for v in values]
+    singles = []
+    for part in parts:
+        found = SINGLE_TIME_RE.match(part.strip())
+        if found:
+            singles.append(_clock(found.group(1), found.group(2)))
+        if len(singles) == 2:
+            return singles[0], singles[1]
+    return None
 
 
 def _is_active_mark(value) -> bool:
@@ -303,19 +340,17 @@ def parse_time_table_sheet(path, sheet_name: str = "Sheet1") -> list[dict]:
     start_at = header_row + 1 if header_row is not None else 0
     for _, row in frame.iloc[start_at:].iterrows():
         values = list(row.tolist())
-        time_idx = None
-        match = None
-        scan_limit = min(3, len(values))
+        parsed_time = None
+        time_idx = 0
+        scan_limit = min(4, len(values))
         for i in range(scan_limit):
-            raw = str(values[i] or "").replace(".", ":").strip()
-            match = TIME_RE.match(raw)
-            if match:
+            parsed_time = _parse_time_range(values[i]) or _parse_time_range(values[i], values[i + 1] if i + 1 < len(values) else "")
+            if parsed_time:
                 time_idx = i
                 break
-        if match is None or time_idx is None:
+        if not parsed_time:
             continue
-        start_time = _clock(match.group(1).replace(".", ":"))
-        end_time = _clock(match.group(2).replace(".", ":"))
+        start_time, end_time = parsed_time
         for day, col_i in day_cols.items():
             if col_i >= len(values):
                 continue
@@ -500,9 +535,9 @@ def subscriptions_for_student(roll_no: Optional[str] = None, email: Optional[str
             if not student:
                 continue
         subject, batch = extract_subject_and_batch(item.get("subject"), item.get("batch"))
-        if not subject or not batch:
+        if not subject:
             continue
-        marker = (subject.lower(), normalize_batch(batch))
+        marker = (subject.lower(), normalize_batch(batch) or "ALL")
         if marker in seen:
             continue
         seen.add(marker)
@@ -536,10 +571,9 @@ def event_matches_subscriptions(event: dict, subscriptions: list[dict]) -> bool:
             continue
         if str(session_batch or "").strip().lower() in {"all batches", "all", "*"}:
             return True
-        if item.get("batch") and (
-            batches_compatible(session_batch, item.get("batch"))
-            or batches_compatible(session_label, item.get("batch"))
-        ):
+        if not session_batch or not str(item.get("batch") or "").strip():
+            return True
+        if batches_compatible(session_batch, item.get("batch")) or batches_compatible(session_label, item.get("batch")):
             return True
     return False
 
