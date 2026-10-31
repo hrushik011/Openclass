@@ -858,18 +858,23 @@ def persist_student_roster(db, students: list[dict], stamp: Optional[str] = None
                 (name, email, phone, batch, stamp, existing["id"]),
             )
             student_id = existing["id"]
+            
         else:
             db.execute(
-                """INSERT INTO students (id, name, email, phone, batch_id, active, updated_at)
-                   VALUES (?, ?, ?, ?, ?, 1, ?)
-                   ON CONFLICT(id) DO UPDATE SET
-                     name=excluded.name,
-                     email=COALESCE(excluded.email, students.email),
-                     phone=COALESCE(excluded.phone, students.phone),
-                     batch_id=COALESCE(excluded.batch_id, students.batch_id),
-                     updated_at=excluded.updated_at""",
-                (student_id, name, email or None, phone or None, batch or None, stamp),
+                """
+                INSERT INTO students (name, email, phone, batch, stamp)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(email) DO UPDATE SET
+                    name = excluded.name,
+                    phone = excluded.phone,
+                    batch = excluded.batch,
+                    stamp = excluded.stamp
+                """,
+                (name, email, phone, batch, stamp),
             )
+            db.commit()
+   
+              
         if email:
             db.execute(
                 """INSERT INTO users (email, name, role, phone, batch_id, active, created_at, updated_at)
