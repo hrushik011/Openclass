@@ -33,6 +33,39 @@ def _row_time_range(row):
         return clock(match.group(1), match.group(2)), clock(match.group(3), match.group(4)), 0
     return None
 
+def is_lecture_enrolled_for_student(lecture_line: str, active_subscriptions: list) -> bool:
+    """
+    Checks if a lecture line from the timetable matches any of the student's active subscriptions,
+    handling both batched courses (e.g., 'Product and Brand Management - Batch 1') 
+    and non-batched courses (e.g., 'Fixed Income Securities').
+    """
+    lecture_line_lower = lecture_line.lower()
+
+    for sub in active_subscriptions:
+        sub_str = str(sub).strip()
+        
+        # Case A: Non-batched subject (e.g., "Fixed Income Securities" or "Systems Thinking")
+        if "(" not in sub_str or "of" not in sub_str:
+            base_sub_name = sub_str.lower()
+            if base_sub_name in lecture_line_lower:
+                return True
+                
+        # Case B: Batched subject (e.g., "Personal Selling and Sales Management (B1 of 3)")
+        else:
+            try:
+                parts = sub_str.split('(')
+                base_name = parts[0].strip().lower()
+                batch_part = parts[1].split('of')[0].replace('b', '').strip()
+                
+                if base_name in lecture_line_lower:
+                    if f"batch {batch_part}" in lecture_line_lower or f"(b{batch_part})" in lecture_line_lower:
+                        return True
+            except Exception:
+                if sub_str.lower() in lecture_line_lower:
+                    return True
+                    
+    return False
+
 def _parse_timetable_sheet(ws):
     classes = []
     for row in ws.iter_rows(values_only=True):
@@ -44,13 +77,21 @@ def _parse_timetable_sheet(ws):
             lines = [x.strip() for x in str(cell or '').splitlines() if x.strip()]
             for i, line in enumerate(lines):
                 entry = ENTRY.match(line)
+                
+                # Fallback: if ENTRY doesn't match strictly, treat the line as a non-batched subject
                 if not entry:
-                    continue
-                course = entry.group(1)
-                batch = BATCH.search(course)
-                faculty = lines[i+1] if i+1 < len(lines) and not ENTRY.match(lines[i+1]) else None
-                subject_name = BATCH.sub('', course).strip()
-                batch_name = f"Batch {batch.group(1)}" if batch is not None else None
+                    if not line or line.startswith(('1)', '2)', '3)', '4)', '5)', '6)', '7)')):
+                        continue
+                    subject_name = line
+                    batch_name = None
+                    faculty = lines[i+1] if i+1 < len(lines) else None
+                else:
+                    course = entry.group(1)
+                    batch = BATCH.search(course)
+                    faculty = lines[i+1] if i+1 < len(lines) and not ENTRY.match(lines[i+1]) else None
+                    subject_name = BATCH.sub('', course).strip()
+                    batch_name = f"Batch {batch.group(1)}" if batch is not None else None
+
                 classes.append(ParsedClass(
                     weekday=day,
                     start_time=start_time,
