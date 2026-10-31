@@ -3,10 +3,11 @@ from dataclasses import dataclass
 
 from openpyxl import load_workbook
 
-TIME=re.compile(r"(\d{1,2})[:.](\d{2})\s*(?:a\.?m\.?|p\.?m\.?)?\s*(?:-|–|—|to)\s*(\d{1,2})[:.](\d{2})",re.IGNORECASE)
+TIME = re.compile(r'(\d{1,2}[:\.]\d{2})\s*[-–to]+\s*(\d{1,2}[:\.]\d{2})', re.IGNORECASE)
 ENTRY=re.compile(r"^\s*\d+\)\s*(.+?)\s*$")
 BATCH=re.compile(r"(?:-|–)?\s*(?:Batch|B)\s*(\d+)(?:\s*of\s*\d+)?\s*$",re.IGNORECASE)
 DAYS=["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"]
+
 @dataclass
 class ParsedClass: weekday:str; start_time:str; end_time:str; subject:str; batch:str|None; faculty_name:str|None
 def clock(hour, minute="00"):
@@ -78,7 +79,7 @@ def _parse_timetable_sheet(ws):
             for i, line in enumerate(lines):
                 entry = ENTRY.match(line)
                 
-                # Fallback: if ENTRY doesn't match strictly, treat the line as a non-batched subject
+                # Fallback for non-batched courses (like Fixed Income Securities)
                 if not entry:
                     if not line or line.startswith(('1)', '2)', '3)', '4)', '5)', '6)', '7)')):
                         continue
