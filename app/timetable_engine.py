@@ -71,8 +71,18 @@ def _compact(value: Optional[str]) -> str:
 
 
 def _clock(hour: int | str, minute: int | str = "00") -> str:
+    """Convert hour[+minute] to 24-hour HH:MM string.
+
+    Accepts either separate hour+minute args or a single 'H:MM' / 'HH:MM' string.
+    Hours 1–6 are treated as afternoon (college schedule heuristic).
+    """
+    hour_str = str(hour).strip()
+    if ":" in hour_str:
+        parts = hour_str.split(":", 1)
+        hour_str = parts[0]
+        minute = parts[1]
     try:
-        hour_n = int(str(hour).strip())
+        hour_n = int(hour_str)
         minute_n = int(str(minute).strip())
     except ValueError:
         return f"{hour}:{minute}"

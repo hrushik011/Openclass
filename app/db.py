@@ -20,22 +20,25 @@ CREATE TABLE IF NOT EXISTS users (
     updated_at TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS timetables (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    filename TEXT NOT NULL,
-    schedule_type TEXT NOT NULL,
-    effective_date TEXT,
-    uploaded_at TEXT NOT NULL
-);
-
 CREATE TABLE IF NOT EXISTS students (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     email TEXT UNIQUE,
     phone TEXT,
     batch_id TEXT,
+    batch TEXT,
+    stamp TEXT,
     active INTEGER NOT NULL DEFAULT 1,
     updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS timetables (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    filename TEXT NOT NULL,
+    schedule_type TEXT NOT NULL,
+    effective_date TEXT,
+    uploaded_at TEXT NOT NULL
+    
 );
 
 CREATE TABLE IF NOT EXISTS faculty (
@@ -175,18 +178,6 @@ CREATE TABLE IF NOT EXISTS attendance_records (
     UNIQUE(student_id, class_id)
 );
 
-CREATE TABLE IF NOT EXISTS attendance_records (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    student_id TEXT NOT NULL,
-    student_name TEXT NOT NULL,
-    batch_id TEXT NOT NULL,
-    class_id TEXT NOT NULL,
-    subject TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'Absent',
-    timestamp TEXT,
-    verified_by_faculty BOOLEAN DEFAULT 0
-);
-
 CREATE TABLE IF NOT EXISTS threads (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     title TEXT NOT NULL,
@@ -240,8 +231,9 @@ def get_db():
 
 def _add_column_if_missing(db: sqlite3.Connection, table: str, column: str, col_type: str):
     try:
-        columns = [row[1] for row in db.execute(f"PRAGMA table_info({table})").fetchall()]
-        if column not in columns:
+        cursor = db.execute(f"PRAGMA table_info({table})")
+        columns = [row[1] for row in cursor.fetchall()]
+        if columns and column not in columns:
             db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")
     except Exception:
         pass
@@ -281,10 +273,10 @@ def seed_default_data(db: sqlite3.Connection):
     ]
     for sid, name, email, phone, batch in students_data:
         db.execute(
-            """INSERT INTO students (id, name, email, phone, batch_id, active, updated_at)
-               VALUES (?, ?, ?, ?, ?, 1, ?)
-               ON CONFLICT(id) DO UPDATE SET name=excluded.name, email=excluded.email""",
-            (sid, name, email, phone, batch, stamp)
+            """INSERT INTO students (id, name, email, phone, batch_id, batch, stamp, active, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)
+               ON CONFLICT(id) DO UPDATE SET name=excluded.name, email=excluded.email, batch=excluded.batch, stamp=excluded.stamp""",
+            (sid, name, email, phone, batch, batch, stamp, stamp)
         )
         db.execute(
             """INSERT INTO users (email, name, role, phone, batch_id, active, created_at, updated_at)
@@ -402,7 +394,17 @@ def initialize():
     with connect() as db:
         db.executescript(SCHEMA)
         # Ensure migration columns for all existing tables
+        _add_column_if_missing(db, "students", "batch", "TEXT")
+        _add_column_if_missing(db, "students", "stamp", "TEXT")
+        _add_column_if_missing(db, "students", "batch_id", "TEXT")
+        _add_column_if_missing(db, "students", "phone", "TEXT")
+        _add_column_if_missing(db, "students", "updated_at", "TEXT")
+        try:
+            db.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_students_email ON students(email)")
+        except Exception:
+            pass
         _add_column_if_missing(db, "users", "password_hash", "TEXT")
+        _add_column_if_missing(db, "users", "batch_id", "TEXT")
         _add_column_if_missing(db, "faculty", "phone", "TEXT")
         _add_column_if_missing(db, "class_sessions", "google_meet_space_id", "TEXT")
         _add_column_if_missing(db, "class_sessions", "google_meet_url", "TEXT")

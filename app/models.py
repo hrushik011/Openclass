@@ -55,6 +55,8 @@ class Student(Base):
     email = Column(String, unique=True, nullable=True, index=True)
     phone = Column(String, nullable=True)
     batch_id = Column(String, nullable=True)
+    batch = Column(String, nullable=True)
+    stamp = Column(String, nullable=True)
     active = Column(Integer, default=1, nullable=False)
     updated_at = Column(String, default=utc_now_iso, nullable=False)
 

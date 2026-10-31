@@ -3,7 +3,7 @@ from dataclasses import dataclass
 
 from openpyxl import load_workbook
 
-TIME = re.compile(r'(\d{1,2}[:\.]\d{2})\s*[-–to]+\s*(\d{1,2}[:\.]\d{2})', re.IGNORECASE)
+TIME = re.compile(r'(\d{1,2}[:\.]\d{2})\s*[-–—to]+\s*(\d{1,2}[:\.]\d{2})', re.IGNORECASE)
 ENTRY=re.compile(r"^\s*\d+\)\s*(.+?)\s*$")
 BATCH=re.compile(r"(?:-|–)?\s*(?:Batch|B)\s*(\d+)(?:\s*of\s*\d+)?\s*$",re.IGNORECASE)
 DAYS=["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"]
@@ -11,27 +11,54 @@ DAYS=["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"]
 @dataclass
 class ParsedClass: weekday:str; start_time:str; end_time:str; subject:str; batch:str|None; faculty_name:str|None
 def clock(hour, minute="00"):
+    """Convert hour[+minute] to 24-hour HH:MM string.
+
+    Accepts either:
+    * Two separate args: clock('1', '30') or clock(1, 30)
+    * One colon-joined string: clock('1:30') – e.g. from a 2-group regex match
+
+    Hours 1-6 are treated as PM (college schedule heuristic):
+      1→13, 2→14, 3→15, 4→16, 5→17, 6→18.
+    Hours 7-12 and 13-23 pass through unchanged.
+    """
+    # Unpack 'H:MM' or 'HH:MM' when passed as a single string
+    hour_str = str(hour).strip()
+    if ":" in hour_str:
+        parts = hour_str.split(":", 1)
+        hour_str = parts[0]
+        minute = parts[1]
     try:
-        hour_n = int(str(hour).strip()); minute_n = int(str(minute).strip())
+        hour_n = int(hour_str)
+        minute_n = int(str(minute).strip())
     except ValueError:
-        value = str(hour).strip(); return value if ":" in value else f"{value}:00"
+        # Last-resort: return whatever we received
+        return f"{hour}:{minute}"
     if 1 <= hour_n <= 6:
         hour_n += 12
     return f"{hour_n:02d}:{minute_n:02d}"
 
+
 def _row_time_range(row):
+    """Scan the first 4 cells of a timetable row for a time range.
+
+    Returns (start_time, end_time, col_index_of_match) or None.
+    """
     cells = list(row or [])
     blob_parts = []
     for idx, value in enumerate(cells[:4]):
-        text = str(value or "").strip().replace("\u00a0", " ").replace("−", "-").replace("–", "-").replace("—", "-")
+        text = str(value or "").strip().replace("\u00a0", " ").replace("\u2212", "-").replace("\u2013", "-").replace("\u2014", "-")
         blob_parts.append(text)
-        match = TIME.search(text.replace(".", ":") if ":" not in text else text) or TIME.search(text)
+        # Normalise dots to colons so '9.00-10.00' also matches
+        normalised = text.replace(".", ":") if ":" not in text else text
+        match = TIME.search(normalised) or TIME.search(text)
         if match:
+            # match.group(1) and match.group(2) are full 'H:MM' strings
             return clock(match.group(1)), clock(match.group(2)), idx
+    # Fallback: join all scanned cells and try once more
     blob = " ".join(blob_parts)
-    match = TIME.search(blob.replace(".", ":"))
+    match = TIME.search(blob.replace(".", ":")) or TIME.search(blob)
     if match:
-        return clock(match.group(1), match.group(2)), clock(match.group(3), match.group(4)), 0
+        return clock(match.group(1)), clock(match.group(2)), 0
     return None
 
 def is_lecture_enrolled_for_student(lecture_line: str, active_subscriptions: list) -> bool:
