@@ -849,6 +849,10 @@ async def upload_timetable(
     schedule_type: str = Form("weekly"),
     effective_date: str | None = Form(None),
 ):
+    with connect() as db:
+        db.execute("DELETE FROM class_sessions;")
+
+
     if not file.filename or not file.filename.lower().endswith((".xlsx", ".xlsm")):
         raise HTTPException(400, "Please upload a valid .xlsx or .xlsm timetable.")
 
