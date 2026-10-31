@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import sqlite3
 from typing import Optional
 
 from ..db import connect
@@ -833,9 +834,20 @@ def find_ingested_student(
 
 def persist_student_roster(db, students: list[dict], stamp: Optional[str] = None) -> int:
     """Upsert ingested Students-Testng (or similar) rows into students + users."""
-    from ..db import now as db_now
+    from ..db import now as db_now, _add_column_if_missing
 
     stamp = stamp or db_now()
+    # Proactively ensure all expected columns exist on students table
+    _add_column_if_missing(db, "students", "batch", "TEXT")
+    _add_column_if_missing(db, "students", "stamp", "TEXT")
+    _add_column_if_missing(db, "students", "updated_at", "TEXT")
+    _add_column_if_missing(db, "students", "phone", "TEXT")
+    _add_column_if_missing(db, "students", "batch_id", "TEXT")
+    try:
+        db.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_students_email ON students(email)")
+    except Exception:
+        pass
+
     saved = 0
     for item in students:
         name = str(item.get("name") or "").strip()
@@ -849,36 +861,134 @@ def persist_student_roster(db, students: list[dict], stamp: Optional[str] = None
             name = (email.split("@")[0] if email else roll).replace(".", " ").replace("-", " ").title()
         existing = find_ingested_student(db, email=email, name=name, roll_no=roll)
         student_id = (existing or {}).get("id") or roll or email or f"std-{name.lower().replace(' ', '-')}"
-        db.execute(
-        """
-        INSERT INTO students (name, email, phone, batch, stamp)
-        VALUES (?, ?, ?, ?, ?)
-        ON CONFLICT(email) DO UPDATE SET
-            name = excluded.name,
-            phone = excluded.phone,
-            batch = excluded.batch,
-            stamp = excluded.stamp
-        """,
-        (name, email, phone, batch, stamp),
-    )
-    db.commit()
-              
-    if email:
-            db.execute(
-                """INSERT INTO users (email, name, role, phone, batch_id, active, created_at, updated_at)
-                   VALUES (?, ?, 'STUDENT', ?, ?, 1, ?, ?)
-                   ON CONFLICT(email) DO UPDATE SET
-                     name=excluded.name,
-                     role='STUDENT',
-                     batch_id=CASE WHEN excluded.batch_id IS NOT NULL AND excluded.batch_id != '' THEN excluded.batch_id ELSE users.batch_id END,
-                     phone=COALESCE(excluded.phone, users.phone),
-                     updated_at=excluded.updated_at""",
-                (email, name, phone or None, batch or None, stamp, stamp),
-            )
-    enrollments = list(item.get("enrollments") or [])
-    if item.get("subject"):
+        sid = student_id
+
+        # Disambiguate sid if needed to avoid colliding with an existing primary key under another email
+        if email:
+            existing_by_email = db.execute("SELECT id FROM students WHERE email = ?", (email,)).fetchone()
+            if existing_by_email:
+                sid = existing_by_email["id"]
+            else:
+                existing_by_id = db.execute("SELECT email FROM students WHERE id = ?", (sid,)).fetchone()
+                if existing_by_id and (existing_by_id["email"] or "").strip().lower() != email:
+                    sid = f"{sid}-{email.split('@')[0]}"
+
+        try:
+            if email:
+                db.execute(
+                    """
+                    INSERT INTO students (id, name, email, phone, batch, stamp, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(email) DO UPDATE SET
+                        name = excluded.name,
+                        phone = excluded.phone,
+                        batch = excluded.batch,
+                        stamp = excluded.stamp,
+                        updated_at = excluded.updated_at
+                    """,
+                    (sid, name, email, phone, batch, stamp, stamp),
+                )
+            else:
+                db.execute(
+                    """
+                    INSERT INTO students (id, name, email, phone, batch, stamp, updated_at)
+                    VALUES (?, ?, NULL, ?, ?, ?, ?)
+                    ON CONFLICT(id) DO UPDATE SET
+                        name = excluded.name,
+                        phone = excluded.phone,
+                        batch = excluded.batch,
+                        stamp = excluded.stamp,
+                        updated_at = excluded.updated_at
+                    """,
+                    (sid, name, phone, batch, stamp, stamp),
+                )
+        except sqlite3.OperationalError:
+            _add_column_if_missing(db, "students", "batch", "TEXT")
+            _add_column_if_missing(db, "students", "stamp", "TEXT")
+            _add_column_if_missing(db, "students", "updated_at", "TEXT")
+            _add_column_if_missing(db, "students", "phone", "TEXT")
+            try:
+                if email:
+                    db.execute(
+                        """
+                        INSERT INTO students (id, name, email, phone, batch, stamp, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(email) DO UPDATE SET
+                            name = excluded.name,
+                            phone = excluded.phone,
+                            batch = excluded.batch,
+                            stamp = excluded.stamp,
+                            updated_at = excluded.updated_at
+                        """,
+                        (sid, name, email, phone, batch, stamp, stamp),
+                    )
+                else:
+                    db.execute(
+                        """
+                        INSERT INTO students (id, name, email, phone, batch, stamp, updated_at)
+                        VALUES (?, ?, NULL, ?, ?, ?, ?)
+                        ON CONFLICT(id) DO UPDATE SET
+                            name = excluded.name,
+                            phone = excluded.phone,
+                            batch = excluded.batch,
+                            stamp = excluded.stamp,
+                            updated_at = excluded.updated_at
+                        """,
+                        (sid, name, phone, batch, stamp, stamp),
+                    )
+            except Exception as e:
+                logger.warning("Operational fallback failed for student (%s, %s): %s", sid, email, e)
+        except sqlite3.IntegrityError:
+            try:
+                if email:
+                    db.execute(
+                        """
+                        UPDATE students SET name = ?, phone = ?, batch = ?, stamp = ?, updated_at = ?
+                        WHERE email = ?
+                        """,
+                        (name, phone, batch, stamp, stamp, email),
+                    )
+                else:
+                    db.execute(
+                        """
+                        UPDATE students SET name = ?, phone = ?, batch = ?, stamp = ?, updated_at = ?
+                        WHERE id = ?
+                        """,
+                        (name, phone, batch, stamp, stamp, sid),
+                    )
+            except Exception as e:
+                logger.warning("Integrity fallback failed for student (%s, %s): %s", sid, email, e)
+
+        # Sync batch_id if legacy column is present
+        if batch:
+            try:
+                db.execute(
+                    "UPDATE students SET batch_id = ? WHERE email = ? AND (batch_id IS NULL OR batch_id = '')",
+                    (batch, email),
+                )
+            except Exception:
+                pass
+
+        if email:
+            try:
+                db.execute(
+                    """INSERT INTO users (email, name, role, phone, batch_id, active, created_at, updated_at)
+                       VALUES (?, ?, 'STUDENT', ?, ?, 1, ?, ?)
+                       ON CONFLICT(email) DO UPDATE SET
+                         name=excluded.name,
+                         role='STUDENT',
+                         batch_id=CASE WHEN excluded.batch_id IS NOT NULL AND excluded.batch_id != '' THEN excluded.batch_id ELSE users.batch_id END,
+                         phone=COALESCE(excluded.phone, users.phone),
+                         updated_at=excluded.updated_at""",
+                    (email, name, phone or None, batch or None, stamp, stamp),
+                )
+            except Exception as e:
+                logger.warning("Could not persist user record for %s: %s", email, e)
+
+        enrollments = list(item.get("enrollments") or [])
+        if item.get("subject"):
             enrollments.append({"subject": item.get("subject"), "batch": batch})
-    for enrollment in enrollments:
+        for enrollment in enrollments:
             raw_subject = enrollment.get("subject") if isinstance(enrollment, dict) else enrollment
             raw_batch = enrollment.get("batch") if isinstance(enrollment, dict) else batch
             subject, enroll_batch = extract_subject_and_batch(raw_subject, raw_batch)
@@ -890,15 +1000,24 @@ def persist_student_roster(db, students: list[dict], stamp: Optional[str] = None
                 enroll_batch = str(raw_subject or "").strip()
             if not subject:
                 continue
-            for key in identity_keys(student_id, email, roll, name):
+            for key in identity_keys(sid, email, roll, name):
                 if not key or len(key) < 3:
                     continue
-                db.execute(
-                    """INSERT OR IGNORE INTO batch_allocations (roll_no, subject, batch)
-                       VALUES (?, ?, ?)""",
-                    (key, subject, enroll_batch),
-                )
-    saved += 1
+                try:
+                    db.execute(
+                        """INSERT OR IGNORE INTO batch_allocations (roll_no, subject, batch)
+                           VALUES (?, ?, ?)""",
+                        (key, subject, enroll_batch),
+                    )
+                except Exception:
+                    pass
+
+        saved += 1
+
+    try:
+        db.commit()
+    except Exception:
+        pass
     return saved
 
 
