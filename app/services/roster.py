@@ -849,33 +849,21 @@ def persist_student_roster(db, students: list[dict], stamp: Optional[str] = None
             name = (email.split("@")[0] if email else roll).replace(".", " ").replace("-", " ").title()
         existing = find_ingested_student(db, email=email, name=name, roll_no=roll)
         student_id = (existing or {}).get("id") or roll or email or f"std-{name.lower().replace(' ', '-')}"
-        if existing:
-            db.execute(
-                """UPDATE students
-                   SET name = ?, email = COALESCE(NULLIF(?, ''), email), phone = COALESCE(NULLIF(?, ''), phone),
-                       batch_id = COALESCE(NULLIF(?, ''), batch_id), active = 1, updated_at = ?
-                   WHERE id = ?""",
-                (name, email, phone, batch, stamp, existing["id"]),
-            )
-            student_id = existing["id"]
-            
-        else:
-            db.execute(
-                """
-                INSERT INTO students (name, email, phone, batch, stamp)
-                VALUES (?, ?, ?, ?, ?)
-                ON CONFLICT(email) DO UPDATE SET
-                    name = excluded.name,
-                    phone = excluded.phone,
-                    batch = excluded.batch,
-                    stamp = excluded.stamp
-                """,
-                (name, email, phone, batch, stamp),
-            )
-            db.commit()
-   
+        db.execute(
+        """
+        INSERT INTO students (name, email, phone, batch, stamp)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(email) DO UPDATE SET
+            name = excluded.name,
+            phone = excluded.phone,
+            batch = excluded.batch,
+            stamp = excluded.stamp
+        """,
+        (name, email, phone, batch, stamp),
+    )
+    db.commit()
               
-        if email:
+    if email:
             db.execute(
                 """INSERT INTO users (email, name, role, phone, batch_id, active, created_at, updated_at)
                    VALUES (?, ?, 'STUDENT', ?, ?, 1, ?, ?)
@@ -887,10 +875,10 @@ def persist_student_roster(db, students: list[dict], stamp: Optional[str] = None
                      updated_at=excluded.updated_at""",
                 (email, name, phone or None, batch or None, stamp, stamp),
             )
-        enrollments = list(item.get("enrollments") or [])
-        if item.get("subject"):
+    enrollments = list(item.get("enrollments") or [])
+    if item.get("subject"):
             enrollments.append({"subject": item.get("subject"), "batch": batch})
-        for enrollment in enrollments:
+    for enrollment in enrollments:
             raw_subject = enrollment.get("subject") if isinstance(enrollment, dict) else enrollment
             raw_batch = enrollment.get("batch") if isinstance(enrollment, dict) else batch
             subject, enroll_batch = extract_subject_and_batch(raw_subject, raw_batch)
@@ -910,7 +898,7 @@ def persist_student_roster(db, students: list[dict], stamp: Optional[str] = None
                        VALUES (?, ?, ?)""",
                     (key, subject, enroll_batch),
                 )
-        saved += 1
+    saved += 1
     return saved
 
 
