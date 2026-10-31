@@ -852,10 +852,8 @@ async def upload_timetable(
     with connect() as db:
         db.execute("DELETE FROM class_sessions;")
 
-
     if not file.filename or not file.filename.lower().endswith((".xlsx", ".xlsm")):
         raise HTTPException(400, "Please upload a valid .xlsx or .xlsm timetable.")
-
     path = _save_upload(file)
     master_path = None
     if master_file and master_file.filename:
