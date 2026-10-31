@@ -44,6 +44,7 @@
     batchesBySubject: {},
     rosterStatus: null,
     pendingTimetableFile: null,
+    pendingMasterFile: null,
     enrollments: [],
     todayClasses: []
   };
@@ -771,7 +772,7 @@
     async uploadTimetable(file) {
       const payloadFile = file || state.pendingTimetableFile;
       if (!payloadFile) {
-        showToast("Select an .xlsx timetable file first.");
+        showToast("Select Time Table.xlsx first.");
         return;
       }
       state.pendingTimetableFile = payloadFile;
@@ -780,6 +781,7 @@
       try {
         const formData = new FormData();
         formData.append("file", payloadFile);
+        if (state.pendingMasterFile) formData.append("master_file", state.pendingMasterFile);
         formData.append("schedule_type", "weekly");
         const headers = {};
         if (state.token) headers.Authorization = `Bearer ${state.token}`;
@@ -802,6 +804,7 @@
         showToast(`Timetable ingested: ${data.filename || payloadFile.name} · ${data.classes_detected || 0} sessions mapped.`);
         state.activeModal = null;
         state.pendingTimetableFile = null;
+        state.pendingMasterFile = null;
         state.batchesBySubject = {};
         await api.loadDashboardData();
       } catch (e) {
@@ -3108,17 +3111,24 @@
         <div class="modal" onclick="event.stopPropagation()">
           <div class="modal-head">
             <div>
-              <h2>Upload University Timetable</h2>
-              <p>Map .xlsx or .xlsm rosters into lectures and Google Meet spaces.</p>
+              <h2>Upload Academic Workbooks</h2>
+              <p>Ingest Master Data.xlsx (identity + batch matrix) and Time Table.xlsx (weekly schedule) separately.</p>
             </div>
             <button class="close-btn" id="btn-close-modal">${getIcon("close", 16)}</button>
           </div>
 
           <form id="form-upload-timetable">
-            <label class="upload-zone${state.pendingTimetableFile ? " has-file" : ""}" id="upload-zone-tt">
+            <label class="upload-zone${state.pendingMasterFile ? " has-file" : ""}" id="upload-zone-master">
               ${getIcon("upload", 28)}
-              <strong style="color: var(--oc-text);">${state.pendingTimetableFile ? "File selected" : "Drop university roster here"}</strong>
-              <span>.XLSX or .XLSM up to 10 MB</span>
+              <strong style="color: var(--oc-text);">${state.pendingMasterFile ? "Master Data selected" : "Drop Master Data.xlsx"}</strong>
+              <span>Students-Testng + Batch Allocation</span>
+              <input type="file" id="master-file-input" accept=".xlsx,.xlsm,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" />
+            </label>
+            <div id="master-file-name" class="tt-file-name">${state.pendingMasterFile ? state.pendingMasterFile.name : ""}</div>
+            <label class="upload-zone${state.pendingTimetableFile ? " has-file" : ""}" id="upload-zone-tt" style="margin-top: 10px;">
+              ${getIcon("upload", 28)}
+              <strong style="color: var(--oc-text);">${state.pendingTimetableFile ? "Time Table selected" : "Drop Time Table.xlsx"}</strong>
+              <span>Sheet1 weekly schedule · Monday–Saturday</span>
               <input type="file" id="tt-file-input" accept=".xlsx,.xlsm,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" />
             </label>
             <div id="tt-file-name" class="tt-file-name">${state.pendingTimetableFile ? state.pendingTimetableFile.name : ""}</div>
@@ -3719,22 +3729,38 @@
     const fileNameTt = document.getElementById("tt-file-name");
     const uploadTtBtn = document.getElementById("btn-do-upload-tt");
 
-    const acceptTimetableFile = (file) => {
+    const dropZoneMaster = document.getElementById("upload-zone-master");
+    const fileInputMaster = document.getElementById("master-file-input");
+    const fileNameMaster = document.getElementById("master-file-name");
+
+    const acceptExcelFile = (file, kind) => {
       if (!file) return;
       const name = String(file.name || "").toLowerCase();
       if (!name.endsWith(".xlsx") && !name.endsWith(".xlsm")) {
-        showToast("Please choose a .xlsx or .xlsm timetable.");
+        showToast("Please choose a .xlsx or .xlsm workbook.");
         return;
       }
-      state.pendingTimetableFile = file;
-      if (fileNameTt) fileNameTt.textContent = file.name;
-      if (dropZoneTt) {
-        dropZoneTt.classList.add("has-file");
-        const title = dropZoneTt.querySelector("strong");
-        if (title) title.textContent = "File selected";
+      if (kind === "master") {
+        state.pendingMasterFile = file;
+        if (fileNameMaster) fileNameMaster.textContent = file.name;
+        if (dropZoneMaster) {
+          dropZoneMaster.classList.add("has-file");
+          const title = dropZoneMaster.querySelector("strong");
+          if (title) title.textContent = "Master Data selected";
+        }
+      } else {
+        state.pendingTimetableFile = file;
+        if (fileNameTt) fileNameTt.textContent = file.name;
+        if (dropZoneTt) {
+          dropZoneTt.classList.add("has-file");
+          const title = dropZoneTt.querySelector("strong");
+          if (title) title.textContent = "Time Table selected";
+        }
       }
-      if (uploadTtBtn) uploadTtBtn.disabled = false;
+      if (uploadTtBtn) uploadTtBtn.disabled = !(state.pendingTimetableFile || state.pendingMasterFile);
     };
+
+    const acceptTimetableFile = (file) => acceptExcelFile(file, "timetable");
 
     if (dropZoneTt && fileInputTt) {
       ["dragenter", "dragover"].forEach((evt) => {
@@ -3759,12 +3785,53 @@
       });
     }
 
+    if (dropZoneMaster && fileInputMaster) {
+      ["dragenter", "dragover"].forEach((evt) => {
+        dropZoneMaster.addEventListener(evt, (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          dropZoneMaster.classList.add("dragging");
+        });
+      });
+      dropZoneMaster.addEventListener("dragleave", (e) => {
+        e.preventDefault();
+        dropZoneMaster.classList.remove("dragging");
+      });
+      dropZoneMaster.addEventListener("drop", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        dropZoneMaster.classList.remove("dragging");
+        acceptExcelFile(e.dataTransfer.files[0], "master");
+      });
+      fileInputMaster.addEventListener("change", () => {
+        acceptExcelFile(fileInputMaster.files[0], "master");
+      });
+    }
+
     if (formUploadTt) {
       formUploadTt.addEventListener("submit", (e) => {
         e.preventDefault();
         const file = (fileInputTt && fileInputTt.files && fileInputTt.files[0]) || state.pendingTimetableFile;
+        const master = (fileInputMaster && fileInputMaster.files && fileInputMaster.files[0]) || state.pendingMasterFile;
+        if (master) state.pendingMasterFile = master;
+        if (!file && master) {
+          fetch("/api/ingest/master-data", {
+            method: "POST",
+            headers: state.token ? { Authorization: `Bearer ${state.token}` } : {},
+            body: (() => { const fd = new FormData(); fd.append("file", master); return fd; })()
+          }).then(async (res) => {
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(data.detail || "Master Data ingest failed");
+            showToast(`Master Data ingested · ${data.subscriptions || 0} subscriptions`);
+            state.activeModal = null;
+            state.pendingMasterFile = null;
+            await api.loadDashboardData();
+            render();
+          }).catch((err) => showToast(err.message));
+          return;
+        }
         if (!file) {
-          showToast("Select an .xlsx timetable file first.");
+          showToast("Select Time Table.xlsx first.");
           return;
         }
         api.uploadTimetable(file);

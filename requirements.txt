@@ -27,6 +27,7 @@ httplib2==0.32.0
 pydantic==2.13.4
 SQLAlchemy==2.0.52
 openpyxl
+pandas
 
 # Task Scheduling (reminder cron)
 APScheduler==3.11.3

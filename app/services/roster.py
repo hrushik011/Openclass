@@ -471,6 +471,13 @@ def student_enrollments(user: Optional[dict]) -> list[dict]:
     """Exact subject+batch rows from the ingested student roster for this learner."""
     if not user:
         return []
+    try:
+        from ..timetable_engine import subscriptions_for_user
+        engine_subs = subscriptions_for_user(user)
+        if engine_subs:
+            return engine_subs
+    except Exception:
+        pass
     email = (user.get("email") or "").strip().lower()
     roll = str(user.get("roll_no") or user.get("roster_id") or user.get("id") or "").strip()
     enrollments = []

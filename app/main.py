@@ -87,6 +87,15 @@ from .services.roster import (
     subjects_compatible,
     _session_exists,
 )
+from .timetable_engine import (
+    enrolled_week,
+    ingest_master_data,
+    ingest_time_table,
+    resolve_student,
+    roster_people_for_persist,
+    subscriptions_for_user,
+    todays_rhythm,
+)
 from .timetable_parser import parse_batch_allocation, parse_student_roster, parse_timetable
 
 
@@ -535,12 +544,34 @@ def student_timetable(current_user: dict = Depends(require_student)):
         rows = [dict(r) for r in db.execute(
             "SELECT * FROM class_sessions ORDER BY class_date, weekday, start_time"
         ).fetchall()]
+    profile = resolve_student(
+        roll_no=str(current_user.get("roll_no") or current_user.get("roster_id") or ""),
+        email=current_user.get("email"),
+        name=current_user.get("name"),
+    )
+    if profile:
+        current_user["roll_no"] = profile.get("roll_no") or current_user.get("roll_no")
+        current_user["roster_id"] = profile.get("roll_no") or current_user.get("roster_id")
+        if profile.get("name"):
+            current_user["name"] = profile.get("name")
+    enrollments = subscriptions_for_user(current_user) or student_enrollments(current_user)
     classes = _sessions_with_meet_links(list_student_class_sessions(current_user, rows), current_user)
-    enrollments = student_enrollments(current_user)
+    if not classes:
+        classes = enrolled_week(
+            roll_no=current_user.get("roll_no"),
+            email=current_user.get("email"),
+            name=current_user.get("name"),
+        )
+    today = _student_today_sessions(classes) or todays_rhythm(
+        roll_no=current_user.get("roll_no"),
+        email=current_user.get("email"),
+        name=current_user.get("name"),
+        events=classes or rows,
+    )
     return {
         "classes": classes,
         "enrollments": enrollments,
-        "today": _student_today_sessions(classes),
+        "today": today,
         "student": {
             "id": current_user.get("roster_id") or current_user.get("id"),
             "email": current_user.get("email"),
@@ -734,24 +765,109 @@ def get_roster_status(
     return status
 
 
+def _save_upload(file: UploadFile) -> Path:
+    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    path = UPLOAD_DIR / f"{now().replace(':', '-')}_{Path(file.filename or 'upload.xlsx').name}"
+    with path.open("wb") as destination:
+        shutil.copyfileobj(file.file, destination)
+    return path
+
+
+def _persist_schedule_events(db, parsed, filename: str, schedule_type: str, effective_date: Optional[str], stamp: str) -> tuple[int, int, int]:
+    from types import SimpleNamespace
+
+    timetable = db.execute(
+        "INSERT INTO timetables(filename, schedule_type, effective_date, uploaded_at) VALUES(?,?,?,?)",
+        (filename, schedule_type, effective_date, stamp),
+    )
+    tt_id = timetable.lastrowid
+    added = 0
+    skipped = 0
+    for raw in parsed:
+        item = raw if hasattr(raw, "weekday") else SimpleNamespace(**{
+            "weekday": raw.get("weekday"),
+            "start_time": raw.get("start_time"),
+            "end_time": raw.get("end_time"),
+            "subject": raw.get("subject"),
+            "batch": raw.get("batch"),
+            "faculty_name": raw.get("faculty_name"),
+        })
+        if _session_exists(db, item):
+            skipped += 1
+            continue
+        code = create_meeting_space(subject=item.subject)
+        db.execute(
+            """INSERT INTO class_sessions(
+                timetable_id, class_date, weekday, start_time, end_time, subject,
+                batch, faculty_name, google_meet_space_id, google_meet_url, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                tt_id,
+                effective_date,
+                item.weekday,
+                item.start_time,
+                item.end_time,
+                item.subject,
+                item.batch,
+                item.faculty_name,
+                code["space_id"],
+                code["meeting_url"],
+                stamp,
+                stamp,
+            ),
+        )
+        added += 1
+    rebuild_faculty_subject_batches(db)
+    return added, skipped, tt_id
+
+
+@app.post("/api/ingest/master-data")
+async def ingest_master_data_file(file: UploadFile = File(...)):
+    if not file.filename or not file.filename.lower().endswith((".xlsx", ".xlsm")):
+        raise HTTPException(400, "Please upload Master Data.xlsx.")
+    path = _save_upload(file)
+    store = ingest_master_data(path, file.filename)
+    people = roster_people_for_persist()
+    stamp = now()
+    with connect() as db:
+        saved = persist_student_roster(db, people, stamp) if people else 0
+    return {
+        "status": "success",
+        "filename": file.filename,
+        "students_saved": saved,
+        "subscriptions": len(store.get("subscriptions") or []),
+        "persisted": True,
+    }
+
+
+@app.post("/api/ingest/time-table")
 @app.post("/api/timetables/upload")
 @app.post("/api/ingest-timetable")
 async def upload_timetable(
     file: UploadFile = File(...),
+    master_file: Optional[UploadFile] = File(None),
     schedule_type: str = Form("weekly"),
     effective_date: str | None = Form(None),
 ):
     if not file.filename or not file.filename.lower().endswith((".xlsx", ".xlsm")):
         raise HTTPException(400, "Please upload a valid .xlsx or .xlsm timetable.")
 
-    path = UPLOAD_DIR / f"{now().replace(':', '-')}_{Path(file.filename).name}"
-    with path.open("wb") as destination:
-        shutil.copyfileobj(file.file, destination)
+    path = _save_upload(file)
+    master_path = None
+    if master_file and master_file.filename:
+        if not master_file.filename.lower().endswith((".xlsx", ".xlsm")):
+            raise HTTPException(400, "Master Data must be an .xlsx or .xlsm file.")
+        master_path = _save_upload(master_file)
 
+    engine_master = ingest_master_data(master_path or path, (master_file.filename if master_file else file.filename) or "")
+    engine_schedule = ingest_time_table(path, file.filename)
     parsed = parse_timetable(path)
-    students = parse_student_roster(path)
-    allocations = parse_batch_allocation(path)
-    if not parsed and not students and not allocations:
+    if not parsed:
+        parsed = engine_schedule.get("events") or []
+    students = parse_student_roster(master_path or path)
+    allocations = parse_batch_allocation(master_path or path)
+    engine_people = roster_people_for_persist()
+    if not parsed and not students and not allocations and not engine_people and not (engine_schedule.get("events") or []):
         raise HTTPException(400, "No valid lecture entries or student roster rows detected.")
 
     stamp = now()
@@ -759,48 +875,21 @@ async def upload_timetable(
         students_saved = persist_student_roster(db, students, stamp) if students else 0
         if allocations:
             students_saved += persist_student_roster(db, allocations, stamp)
-        timetable = db.execute(
-            "INSERT INTO timetables(filename, schedule_type, effective_date, uploaded_at) VALUES(?,?,?,?)",
-            (file.filename, schedule_type, effective_date, stamp),
-        )
-        tt_id = timetable.lastrowid
-        added = 0
-        skipped = 0
-        for item in parsed:
-            if _session_exists(db, item):
-                skipped += 1
-                continue
-            code = create_meeting_space(subject=item.subject)
-            db.execute(
-                """INSERT INTO class_sessions(
-                    timetable_id, class_date, weekday, start_time, end_time, subject,
-                    batch, faculty_name, google_meet_space_id, google_meet_url, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    tt_id,
-                    effective_date,
-                    item.weekday,
-                    item.start_time,
-                    item.end_time,
-                    item.subject,
-                    item.batch,
-                    item.faculty_name,
-                    code["space_id"],
-                    code["meeting_url"],
-                    stamp,
-                    stamp,
-                ),
-            )
-            added += 1
-        rebuild_faculty_subject_batches(db)
+        if engine_people:
+            students_saved += persist_student_roster(db, engine_people, stamp)
+        added, skipped, _tt_id = _persist_schedule_events(
+            db, parsed, file.filename, schedule_type, effective_date, stamp
+        ) if parsed else (0, 0, 0)
 
     return {
         "status": "success",
         "filename": file.filename,
+        "master_filename": engine_master.get("master_filename"),
         "classes_detected": len(parsed),
         "sessions_added": added,
         "sessions_existing": skipped,
         "students_saved": students_saved,
+        "subscriptions": len(engine_master.get("subscriptions") or []),
         "persisted": True,
         "message": (
             f"Stored {added} new class sessions"

@@ -58,7 +58,7 @@ def parse_timetable(path):
 
 STUDENT_SHEET_HINTS = ("student", "roster", "testng", "learners", "enrol")
 NAME_HEADERS = {"name", "student name", "full name", "student", "learner"}
-EMAIL_HEADERS = {"email", "e-mail", "mail", "student email"}
+EMAIL_HEADERS = {"email", "e-mail", "mail", "mailid", "mail id", "student email"}
 BATCH_HEADERS = {"batch", "batch name", "batch id", "class", "section", "division", "group"}
 PHONE_HEADERS = {"phone", "mobile", "contact", "phone number"}
 ROLL_HEADERS = {
@@ -84,7 +84,8 @@ SKIP_SUBJECT_HEADERS = {
 
 
 def _header_key(value) -> str:
-    return re.sub(r"[^a-z0-9]+", " ", str(value or "").strip().lower()).strip()
+    text = re.sub(r"([a-z])([A-Z])", r"\1 \2", str(value or "").strip())
+    return re.sub(r"[^a-z0-9]+", " ", text.lower()).strip()
 
 
 def _truthy_enrollment(value) -> bool:
