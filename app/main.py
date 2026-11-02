@@ -555,7 +555,23 @@ def student_timetable(current_user: dict = Depends(require_student)):
         if profile.get("name"):
             current_user["name"] = profile.get("name")
     enrollments = subscriptions_for_user(current_user) or student_enrollments(current_user)
-    classes = rows  # Temporarily bypass batch filter to see if afternoon classes appear
+    
+    # Extract enrolled subject names for the logged-in student
+    enrolled_subjects = {
+        (e.get("subject") or "").strip().lower() 
+        for e in enrollments 
+        if isinstance(e, dict)
+    }
+    
+    # Keep classes where the subject matches student's enrollment OR has no batch restriction
+    filtered_classes = []
+    for s in rows:
+        subj = (s.get("subject") or "").strip().lower()
+        batch = (s.get("batch") or "").strip()
+        if any(es in subj for es in enrolled_subjects) or not batch:
+            filtered_classes.append(s)
+            
+    classes = _sessions_with_meet_links(filtered_classes, current_user)
      
     today = _student_today_sessions(classes) or todays_rhythm(
         roll_no=current_user.get("roll_no"),
