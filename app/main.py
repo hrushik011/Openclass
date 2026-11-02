@@ -563,7 +563,7 @@ def student_timetable(current_user: dict = Depends(require_student)):
         if isinstance(e, dict)
     }
     
-    # Keep classes where the subject matches student's enrollment OR has no batch restriction
+  # Keep classes where the subject matches student's enrollment OR has no batch restriction
     filtered_classes = []
     for s in rows:
         subj = (s.get("subject") or "").strip().lower()
@@ -572,13 +572,7 @@ def student_timetable(current_user: dict = Depends(require_student)):
             filtered_classes.append(s)
             
     classes = _sessions_with_meet_links(filtered_classes, current_user)
-     
-    today = _student_today_sessions(classes) or todays_rhythm(
-        roll_no=current_user.get("roll_no"),
-        email=current_user.get("email"),
-        name=current_user.get("name"),
-        events=classes or rows,
-    )
+    
     return {
         "classes": classes,
         "enrollments": enrollments,
@@ -589,7 +583,7 @@ def student_timetable(current_user: dict = Depends(require_student)):
             "name": current_user.get("name"),
             "batch_id": current_user.get("batch_id"),
             "roll_no": current_user.get("roll_no") or current_user.get("roster_id"),
-        },
+        }
     }
 
 
