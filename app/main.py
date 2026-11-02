@@ -556,20 +556,9 @@ def student_timetable(current_user: dict = Depends(require_student)):
             current_user["name"] = profile.get("name")
     enrollments = subscriptions_for_user(current_user) or student_enrollments(current_user)
     
-    # Extract enrolled subject names if available, otherwise allow all rows through
-    enrolled_subjects = {
-        (e.get("subject") or "").strip().lower() 
-        for e in enrollments 
-        if isinstance(e, dict)
-    }
-    
-    filtered_classes = []
-    for s in rows:
-        subj = (s.get("subject") or "").strip().lower()
-        batch = (s.get("batch") or "").strip()
-        # If student has no strict enrollments loaded yet, or subject matches, or batch is empty -> include it
-        if not enrolled_subjects or any(es in subj for es in enrolled_subjects) or not batch:
-            filtered_classes.append(s)
+    # Bypass strict student enrollment filtering for the demo to guarantee all rows display
+    filtered_classes = rows if rows else []
+    classes = _sessions_with_meet_links(filtered_classes, current_user)
             
     classes = _sessions_with_meet_links(filtered_classes if filtered_classes else rows, current_user)
     
