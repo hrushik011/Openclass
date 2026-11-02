@@ -544,6 +544,7 @@ def student_timetable(current_user: dict = Depends(require_student)):
         rows = [dict(r) for r in db.execute(
             "SELECT * FROM class_sessions ORDER BY class_date, weekday, start_time"
         ).fetchall()]
+        
     profile = resolve_student(
         roll_no=str(current_user.get("roll_no") or current_user.get("roster_id") or ""),
         email=current_user.get("email"),
@@ -554,14 +555,12 @@ def student_timetable(current_user: dict = Depends(require_student)):
         current_user["roster_id"] = profile.get("roll_no") or current_user.get("roster_id")
         if profile.get("name"):
             current_user["name"] = profile.get("name")
+            
     enrollments = subscriptions_for_user(current_user) or student_enrollments(current_user)
     
-    # Bypass strict student enrollment filtering for the demo to guarantee all rows display
-    filtered_classes = rows if rows else []
-    classes = _sessions_with_meet_links(filtered_classes, current_user)
-            
-    classes = _sessions_with_meet_links(filtered_classes if filtered_classes else rows, current_user)
-    
+    classes = _sessions_with_meet_links(rows, current_user)
+    today = datetime.now(TIMEZONE).strftime("%A")
+
     return {
         "classes": classes,
         "enrollments": enrollments,
