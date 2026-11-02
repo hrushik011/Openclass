@@ -555,13 +555,8 @@ def student_timetable(current_user: dict = Depends(require_student)):
         if profile.get("name"):
             current_user["name"] = profile.get("name")
     enrollments = subscriptions_for_user(current_user) or student_enrollments(current_user)
-    classes = _sessions_with_meet_links(list_student_class_sessions(current_user, rows), current_user)
-    if not classes:
-        classes = enrolled_week(
-            roll_no=current_user.get("roll_no"),
-            email=current_user.get("email"),
-            name=current_user.get("name"),
-        )
+    classes = rows  # Temporarily bypass batch filter to see if afternoon classes appear
+     
     today = _student_today_sessions(classes) or todays_rhythm(
         roll_no=current_user.get("roll_no"),
         email=current_user.get("email"),
