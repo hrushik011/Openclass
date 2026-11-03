@@ -33,7 +33,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from .auth import (
     authenticate_user,
     get_current_user,
-    get_optional_current_user,
+    get_optional_current_user,s
     require_faculty,
     require_student,
     verify_and_provision_ms_user,
