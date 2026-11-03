@@ -730,6 +730,29 @@ html[data-theme="light"] .graph-node .node-name {
   color: #ffffff !important;
 }
 
+button.graph-node-btn {
+  appearance: none;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+}
+
+button.graph-node-btn:hover {
+  transform: translateY(-2px) scale(1.02);
+  box-shadow: 0 8px 24px rgba(124, 58, 237, 0.35);
+  border-color: rgba(167, 139, 250, 0.55) !important;
+}
+
+button.graph-node-btn:focus-visible {
+  outline: 2px solid #a78bfa;
+  outline-offset: 3px;
+}
+
+button.graph-node-btn:active {
+  transform: translateY(0) scale(0.99);
+}
+
 html[data-theme="light"] .faculty-stat,
 html[data-theme="light"] .quick-action,
 html[data-theme="light"] .compact-action,

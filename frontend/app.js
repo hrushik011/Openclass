@@ -2257,9 +2257,99 @@
   }
 
   function todaysEnrolledClasses() {
-    const fromApi = enrolledSessions(state.todayClasses || []);
-    if (fromApi.length) return fromApi.filter((item) => isClassToday(item));
+    const fromApi = state.todayClasses || [];
+    if (fromApi.length) {
+      return fromApi.filter((item) => isClassToday(item));
+    }
     return enrolledSessions(state.classes || []).filter((item) => isClassToday(item));
+  }
+
+  function pickGraphNoteForSubject(notes, subjectLabel) {
+    const items = Array.isArray(notes) ? notes : [];
+    if (!items.length) return null;
+    const subject = cleanSubjectName(subjectLabel);
+    if (subject && subject.toLowerCase() !== "no class yet") {
+      const matched = items.find(
+        (note) => subjectsMatch(note.subject, subject) || subjectsMatch(note.title, subject)
+      );
+      if (matched) return matched;
+    }
+    return items[0];
+  }
+
+  function pickAnnouncementThread(threads) {
+    const items = Array.isArray(threads) ? threads : [];
+    if (!items.length) return null;
+    const scoped = items.filter((t) => {
+      const scope = String(t.scope_type || "public").toLowerCase();
+      return scope === "public" || scope === "batch";
+    });
+    const pool = scoped.length ? scoped : items;
+    return pool.find((t) => /announce|update|notice|news/i.test(String(t.title || ""))) || pool[0];
+  }
+
+  async function navigateKnowledgeGraph(target, options) {
+    const opts = options || {};
+    switch (target) {
+      case "timetable":
+        state.currentTab = "My Timetable";
+        state.activeModal = null;
+        render();
+        return;
+      case "subject":
+        state.currentTab = "knowledge-hub";
+        if (opts.subject) state.notesSubjectFilter = cleanSubjectName(opts.subject);
+        state.notesSearch = "";
+        render();
+        return;
+      case "note": {
+        const noteId = opts.noteId ? Number(opts.noteId) : null;
+        const note = noteId ? (state.notes || []).find((n) => Number(n.id) === noteId) : null;
+        state.currentTab = "knowledge-hub";
+        if (note && note.subject) state.notesSubjectFilter = note.subject;
+        else if (opts.subject) state.notesSubjectFilter = cleanSubjectName(opts.subject);
+        state.notesSearch = "";
+        render();
+        if (noteId) {
+          window.open(`/api/notes/${noteId}/file`, "_blank", "noopener,noreferrer");
+        }
+        return;
+      }
+      case "assignment": {
+        state.currentTab = "Assignments";
+        const assignmentId = opts.assignmentId ? Number(opts.assignmentId) : null;
+        const assignment = assignmentId
+          ? (state.assignments || []).find((item) => Number(item.id) === assignmentId)
+          : null;
+        if (assignment && !assignment.has_submitted) {
+          state.modalData = assignment;
+          state.activeModal = "assignment_submit";
+        } else {
+          state.modalData = assignment || null;
+          state.activeModal = null;
+        }
+        render();
+        return;
+      }
+      case "announcements": {
+        state.currentTab = "Class Threads";
+        state.threadScopeFilter = "all";
+        render();
+        const threadId = opts.threadId ? Number(opts.threadId) : null;
+        const thread = threadId
+          ? (state.threads || []).find((t) => Number(t.id) === threadId)
+          : pickAnnouncementThread(state.threads);
+        if (thread) {
+          await api.loadThread(Number(thread.id));
+        } else {
+          showToast("No class threads yet — open Class Threads to start a discussion.");
+        }
+        return;
+      }
+      default:
+        state.currentTab = "knowledge-hub";
+        render();
+    }
   }
 
   function renderStudentDashboard() {
@@ -2271,7 +2361,8 @@
     const pendingAssignments = allAssignments.filter((a) => !a.has_submitted);
     const graphSubject = upNext ? cleanSubjectName(upNext.subject) : (state.subjects[0] || "No class yet");
     const graphAssignment = pendingAssignments[0] || allAssignments[0];
-    const graphNote = (state.notes || [])[0];
+    const graphNote = pickGraphNoteForSubject(state.notes, graphSubject);
+    const graphThread = pickAnnouncementThread(state.threads);
 
     return `
       <div class="student-view">
@@ -2326,22 +2417,22 @@
                 <line x1="300" y1="168" x2="300" y2="286" stroke="rgba(147,133,204,0.3)" stroke-width="1.5"></line>
                 <circle cx="300" cy="168" r="4" fill="#a78bfa"></circle>
               </svg>
-              <div class="graph-node central n-center">
+              <button type="button" class="graph-node central n-center graph-node-btn" data-action="graph-nav" data-target="timetable" aria-label="Open my timetable for ${graphSubject}">
                 <div class="node-kicker">Current class</div>
                 <span class="node-name">${graphSubject}</span>
-              </div>
-              <div class="graph-node n-top">
+              </button>
+              <button type="button" class="graph-node n-top graph-node-btn" data-action="graph-nav" data-target="note" data-note-id="${graphNote ? graphNote.id : ""}" data-subject="${graphSubject}" aria-label="Open lecture notes${graphNote ? ": " + (graphNote.title || graphNote.subject) : ""}">
                 <div class="node-kicker">Document</div>
                 <span class="node-name">${graphNote ? (graphNote.title || graphNote.subject) : "Lecture Notes"}</span>
-              </div>
-              <div class="graph-node n-left">
+              </button>
+              <button type="button" class="graph-node n-left graph-node-btn" data-action="graph-nav" data-target="assignment" data-assignment-id="${graphAssignment ? graphAssignment.id : ""}" aria-label="Open assignments${graphAssignment ? ": " + graphAssignment.title : ""}">
                 <div class="node-kicker">Assignment</div>
                 <span class="node-name">${graphAssignment ? graphAssignment.title : "No assignment"}</span>
-              </div>
-              <div class="graph-node n-right">
+              </button>
+              <button type="button" class="graph-node n-right graph-node-btn" data-action="graph-nav" data-target="announcements" data-thread-id="${graphThread ? graphThread.id : ""}" aria-label="Open class announcements and threads">
                 <div class="node-kicker">Updates</div>
-                <span class="node-name">Announcements</span>
-              </div>
+                <span class="node-name">${graphThread ? graphThread.title : "Announcements"}</span>
+              </button>
             </div>
           </section>
 
@@ -3627,6 +3718,17 @@
       btn.addEventListener("click", () => {
         state.currentTab = "knowledge-hub";
         render();
+      });
+    });
+
+    document.querySelectorAll('[data-action="graph-nav"]').forEach((btn) => {
+      btn.addEventListener("click", () => {
+        navigateKnowledgeGraph(btn.dataset.target, {
+          noteId: btn.dataset.noteId,
+          assignmentId: btn.dataset.assignmentId,
+          threadId: btn.dataset.threadId,
+          subject: btn.dataset.subject,
+        });
       });
     });
 

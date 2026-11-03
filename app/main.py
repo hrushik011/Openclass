@@ -85,6 +85,7 @@ from .services.roster import (
     list_student_class_sessions,
     find_ingested_student,
     subjects_compatible,
+    normalize_time_label,
     _session_exists,
 )
 from .timetable_engine import (
@@ -532,9 +533,76 @@ def _sessions_with_meet_links(sessions: list[dict], current_user: Optional[dict]
     return result
 
 
+def _session_occurs_today(session: dict, weekday: str, ymd: str) -> bool:
+    if str(session.get("weekday") or "").strip().lower() != weekday:
+        return False
+    class_date = str(session.get("class_date") or "").strip()
+    if class_date and class_date[:10] != ymd:
+        return False
+    status = str(session.get("status") or "scheduled").strip().lower()
+    return status not in {"cancelled", "canceled"}
+
+
 def _student_today_sessions(classes: list[dict]) -> list[dict]:
-    today = datetime.now(TIMEZONE).strftime("%A")
-    return [c for c in classes if str(c.get("weekday") or "").strip().lower() == today.lower()]
+    """All active enrolled sessions for today (IST). Never collapses parallel same-time slots."""
+    now = datetime.now(TIMEZONE)
+    weekday = now.strftime("%A").lower()
+    ymd = now.strftime("%Y-%m-%d")
+    sessions_today: list[dict] = []
+    for session in classes or []:
+        if not _session_occurs_today(session, weekday, ymd):
+            continue
+        sessions_today.append(dict(session))
+    sessions_today.sort(
+        key=lambda s: (
+            normalize_time_label(s.get("start_time") or "99:99"),
+            str(s.get("subject") or "").lower(),
+            str(s.get("id") or ""),
+            str(s.get("faculty_name") or "").lower(),
+        )
+    )
+    return sessions_today
+
+
+def _student_today_rhythm(current_user: dict, rows: list[dict], enrolled_classes: list[dict]) -> list[dict]:
+    """Today's Rhythm: union of enrolled DB sessions and engine matches (keep every distinct row)."""
+    sessions_today = _student_today_sessions(enrolled_classes)
+    now = datetime.now(TIMEZONE)
+    weekday = now.strftime("%A").lower()
+    ymd = now.strftime("%Y-%m-%d")
+
+    rhythm_events = todays_rhythm(
+        roll_no=str(current_user.get("roll_no") or current_user.get("roster_id") or ""),
+        email=current_user.get("email"),
+        name=current_user.get("name"),
+        events=rows or None,
+    )
+    if not rhythm_events:
+        return sessions_today
+
+    known_ids = {str(s.get("id")) for s in sessions_today if s.get("id") is not None}
+    merged = list(sessions_today)
+    for event in rhythm_events:
+        if not _session_occurs_today(event, weekday, ymd):
+            continue
+        item = dict(event)
+        eid = item.get("id")
+        if eid is not None:
+            token = str(eid)
+            if token in known_ids:
+                continue
+            known_ids.add(token)
+        merged.append(item)
+
+    merged.sort(
+        key=lambda s: (
+            normalize_time_label(s.get("start_time") or "99:99"),
+            str(s.get("subject") or "").lower(),
+            str(s.get("id") or ""),
+            str(s.get("faculty_name") or "").lower(),
+        )
+    )
+    return merged
 
 
 @app.get("/api/student/timetable")
@@ -558,17 +626,16 @@ def student_timetable(current_user: dict = Depends(require_student)):
             
     enrollments = subscriptions_for_user(current_user) or student_enrollments(current_user)
 
-    classes = _sessions_with_meet_links(
-        list_student_class_sessions(current_user, rows),
-        current_user,
-    )
-    today = datetime.now(TIMEZONE).strftime("%A")
+    enrolled = list_student_class_sessions(current_user, rows)
+    classes = _sessions_with_meet_links(enrolled, current_user)
+    today_weekday = datetime.now(TIMEZONE).strftime("%A")
+    today_sessions = _student_today_rhythm(current_user, rows, classes)
 
     return {
         "classes": classes,
         "enrollments": enrollments,
-        "today": _student_today_sessions(classes),
-        "today_weekday": today,
+        "today": today_sessions,
+        "today_weekday": today_weekday,
         "student": {
             "id": current_user.get("roster_id") or current_user.get("id"),
             "email": current_user.get("email"),
@@ -586,7 +653,12 @@ def student_dashboard(current_user: dict = Depends(require_student)):
         student_id=str(current_user.get("roster_id") or current_user.get("id")),
         current_user=current_user,
     )
-    return {**timetable, "attendance": attendance}
+    # Keep `today` as the full rhythm list — never replace with attendance aggregates.
+    return {
+        **timetable,
+        "today": timetable.get("today") or [],
+        "attendance": attendance,
+    }
 
 
 @app.get("/api/student/attendance")
