@@ -557,14 +557,18 @@ def student_timetable(current_user: dict = Depends(require_student)):
             current_user["name"] = profile.get("name")
             
     enrollments = subscriptions_for_user(current_user) or student_enrollments(current_user)
-    
-    classes = _sessions_with_meet_links(rows, current_user)
+
+    classes = _sessions_with_meet_links(
+        list_student_class_sessions(current_user, rows),
+        current_user,
+    )
     today = datetime.now(TIMEZONE).strftime("%A")
 
     return {
         "classes": classes,
         "enrollments": enrollments,
-        "today": today,
+        "today": _student_today_sessions(classes),
+        "today_weekday": today,
         "student": {
             "id": current_user.get("roster_id") or current_user.get("id"),
             "email": current_user.get("email"),
