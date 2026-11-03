@@ -195,6 +195,18 @@ def is_all_batches(batch: Optional[str]) -> bool:
     return _norm(batch) in {"", "all batches", "all", "*"}
 
 
+def normalize_time_label(value: Optional[str]) -> str:
+    """Canonical HH:MM for timetable grid keys (8:00 → 08:00)."""
+    text = str(value or "").strip()
+    if not text or ":" not in text:
+        return text
+    hour, minute = text.split(":", 1)
+    try:
+        return f"{int(hour.strip()):02d}:{int(minute.strip()):02d}"
+    except ValueError:
+        return text
+
+
 def extract_subject_and_batch(subject: Optional[str], batch: Optional[str] = None) -> tuple[str, str]:
     raw_subject = str(subject or "").strip()
     raw_batch = str(batch or "").strip()
@@ -556,6 +568,9 @@ def list_student_class_sessions(user: Optional[dict], sessions: Optional[list[di
         ).fetchall()]
         all_sessions = [dict(r) if not isinstance(r, dict) else r for r in rows]
     matched = [row for row in all_sessions if enrollment_matches_session(row, user, enrollments)]
+    for row in matched:
+        row["start_time"] = normalize_time_label(row.get("start_time"))
+        row["end_time"] = normalize_time_label(row.get("end_time"))
     if not matched and enrollments:
         subjects = sorted({(s.get("subject"), s.get("batch")) for s in all_sessions})
         message = (
@@ -580,6 +595,19 @@ def student_subscribed_subjects(user: Optional[dict]) -> list[str]:
     return subjects
 
 
+def _enrollment_subject_batch(item: dict) -> tuple[str, str]:
+    """Resolve subject/batch from roster row without treating full raw line as batch text."""
+    enroll_subject, enroll_batch = extract_subject_and_batch(item.get("subject"), item.get("batch"))
+    raw = str(item.get("raw") or "").strip()
+    if raw:
+        raw_subject, raw_batch = extract_subject_and_batch(raw, None)
+        if not enroll_subject:
+            enroll_subject = raw_subject
+        if not enroll_batch:
+            enroll_batch = raw_batch
+    return enroll_subject, enroll_batch
+
+
 def enrollment_matches_session(session: dict, user: Optional[dict], enrollments: Optional[list[dict]] = None) -> bool:
     enrollments = enrollments if enrollments is not None else student_enrollments(user)
     if not enrollments:
@@ -587,14 +615,18 @@ def enrollment_matches_session(session: dict, user: Optional[dict], enrollments:
     session_subject, session_batch = extract_subject_and_batch(session.get("subject"), session.get("batch"))
     session_label = f"{session.get('subject') or ''} {session.get('batch') or ''}"
     for item in enrollments:
-        enroll_subject, enroll_batch = extract_subject_and_batch(item.get("subject"), item.get("batch") or item.get("raw"))
+        enroll_subject, enroll_batch = _enrollment_subject_batch(item)
         if not enroll_subject:
             continue
         if not subjects_compatible(session_subject, enroll_subject) and not subjects_compatible(session_label, enroll_subject):
             continue
         if _norm(session_batch) in {"all batches", "all", "*"}:
             return True
-        if not session_batch or not enroll_batch:
+        # Subject-only enrollment: show every slot for that paper (batched or not).
+        if not str(enroll_batch or "").strip():
+            return True
+        # Unbatched session cell (e.g. Fixed Income Securities) for enrolled students.
+        if not str(session_batch or "").strip():
             return True
         if batches_compatible(session_batch, enroll_batch) or batches_compatible(session_label, enroll_batch):
             return True

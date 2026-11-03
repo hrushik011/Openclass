@@ -19,7 +19,7 @@ def clock(hour, minute="00"):
 
     Hours 1-6 are treated as PM (college schedule heuristic):
       1→13, 2→14, 3→15, 4→16, 5→17, 6→18.
-    Hours 7-12 and 13-23 pass through unchanged.
+    Hours 7-12 and 13-23 pass through unchanged.    
     """
     # Unpack 'H:MM' or 'HH:MM' when passed as a single string
     hour_str = str(hour).strip()

@@ -131,6 +131,31 @@
     return a === "ALL" || b === "ALL" || (a && b && a === b);
   }
 
+  function normalizeGridTime(value) {
+    const text = String(value || "").trim();
+    if (!text || !text.includes(":")) return text;
+    const parts = text.split(":");
+    const hour = Number(parts[0]);
+    const minute = Number(parts[1]);
+    if (Number.isNaN(hour) || Number.isNaN(minute)) return text;
+    return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+  }
+
+  function enrollmentBatchLabel(enr) {
+    return String(enr.batch || extractBatchFromLabel(enr.raw || enr.subject) || "").trim();
+  }
+
+  function sessionMatchesEnrollment(session, enr) {
+    if (!subjectsMatch(session.subject, enr.subject) && !subjectsMatch(session.subject, enr.raw)) {
+      return false;
+    }
+    const sessionBatch = String(session.batch || extractBatchFromLabel(session.subject) || "").trim();
+    const enrollBatch = enrollmentBatchLabel(enr);
+    if (!sessionBatch || normalizeBatch(sessionBatch) === "ALL") return true;
+    if (!enrollBatch) return true;
+    return batchesMatch(sessionBatch, enrollBatch) || batchesMatch(session.subject, enrollBatch);
+  }
+
   function applyViewerProfile(payload) {
     if (!payload || !state.user) return;
     if (payload.viewer_batch) state.user.batch_id = payload.viewer_batch;
@@ -2228,15 +2253,7 @@
     if (role !== "STUDENT") return items;
     const enrollments = state.enrollments || [];
     if (!enrollments.length) return items;
-    return items.filter((session) => enrollments.some((enr) => {
-      if (!subjectsMatch(session.subject, enr.subject) && !subjectsMatch(session.subject, enr.raw)) {
-        return false;
-      }
-      const sessionBatch = session.batch || extractBatchFromLabel(session.subject);
-      if (!enr.batch) return Boolean(sessionBatch);
-      if (!sessionBatch || normalizeBatch(sessionBatch) === "ALL") return true;
-      return batchesMatch(sessionBatch, enr.batch) || batchesMatch(session.subject, enr.batch);
-    }));
+    return items.filter((session) => enrollments.some((enr) => sessionMatchesEnrollment(session, enr)));
   }
 
   function todaysEnrolledClasses() {
@@ -2615,21 +2632,21 @@
 
   // --- 6. Timetable & Schedule View ---
   function weeklyTimetableTimes(classes) {
+    const DEFAULT_AFTERNOON_SLOTS = ["13:30", "14:30", "15:45"];
     const seen = new Set();
-    const times = [];
-    (classes || []).forEach((item) => {
-      const stamp = item.start_time || "";
-      if (!stamp || seen.has(stamp)) return;
-      seen.add(stamp);
-      times.push(stamp);
-    });
-    return times.sort((a, b) => {
-      const toMin = (value) => {
-        const parts = String(value).split(":");
-        return Number(parts[0] || 0) * 60 + Number(parts[1] || 0);
-      };
-      return toMin(a) - toMin(b);
-    });
+    const addSlot = (value) => {
+      const stamp = normalizeGridTime(value);
+      if (stamp) seen.add(stamp);
+    };
+
+    DEFAULT_AFTERNOON_SLOTS.forEach(addSlot);
+    (classes || []).forEach((item) => addSlot(item.start_time || ""));
+
+    const toMinutes = (value) => {
+      const parts = String(value).split(":");
+      return Number(parts[0] || 0) * 60 + Number(parts[1] || 0);
+    };
+    return [...seen].sort((a, b) => toMinutes(a) - toMinutes(b));
   }
 
   function renderTimetableView() {
@@ -2641,7 +2658,7 @@
 
     const cellSessions = (day, time) => (classes || []).filter((item) => (
       String(item.weekday || "").toLowerCase() === day.toLowerCase()
-      && String(item.start_time || "") === time
+      && normalizeGridTime(item.start_time || "") === normalizeGridTime(time)
     ));
 
     return `
