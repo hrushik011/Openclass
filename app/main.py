@@ -56,7 +56,7 @@ from .config import (
     microsoft_oauth_tenant,
 )
 from .db import connect, initialize, now
-from .email import send_platform_email
+from .email import PLATFORM_FROM, send_platform_email
 from .gmail_sender import send_email
 from .google_meet import build_meeting_launch_url, create_meeting_space
 from .services.assignment import (
@@ -330,6 +330,12 @@ class MicrosoftAuthRequest(BaseModel):
     email: str
     name: Optional[str] = None
     role: Optional[str] = "STUDENT"
+
+
+class TestEmailRequest(BaseModel):
+    email: str
+    subject: Optional[str] = "Openclass Resend connectivity test"
+    message: Optional[str] = None
     batch_id: Optional[str] = None
     phone: Optional[str] = None
     id_token: Optional[str] = None
@@ -502,6 +508,50 @@ def ms_sso_status():
         "configured": MS_CONFIGURED,
         "tenant_id": microsoft_oauth_tenant() if MS_CONFIGURED else None,
         "start_url": "/auth/microsoft/start",
+    }
+
+
+@app.post("/api/test-email")
+def test_platform_email(
+    payload: TestEmailRequest,
+    current_user: Optional[dict] = Depends(get_optional_current_user),
+):
+    """
+    Send a single Resend test message to verify platform email (updates@useopenclass.in).
+    Allowed in development/test APP_MODE or for faculty/admin users.
+    """
+    role = str((current_user or {}).get("role") or "").upper()
+    dev_modes = {"development", "dev", "test", "local"}
+    if APP_MODE not in dev_modes and role not in {"FACULTY", "ADMIN", "GENERALIST"}:
+        raise HTTPException(status_code=403, detail="Not authorized to send test emails.")
+
+    target = payload.email.strip()
+    if "@" not in target:
+        raise HTTPException(status_code=400, detail="A valid email address is required.")
+
+    body = (payload.message or "").strip() or (
+        "This is a test message from Openclass. If you received this, Resend is configured correctly."
+    )
+    html = (
+        f"<p>{html.escape(body)}</p>"
+        f"<p style='color:#64748b;font-size:12px;'>Sent via Openclass platform email · {PLATFORM_FROM}</p>"
+    )
+    subject = (payload.subject or "Openclass Resend connectivity test").strip()
+    logger.info("API /api/test-email requested to=%s by role=%s", target, role or "anonymous")
+    print(f"/api/test-email requested to={target} by role={role or 'anonymous'}", flush=True)
+
+    response = send_platform_email(target, subject, html)
+    if not response:
+        raise HTTPException(
+            status_code=502,
+            detail="Resend did not accept the message. Check RESEND_API_KEY and Render logs.",
+        )
+    return {
+        "status": "sent",
+        "to": target,
+        "from": PLATFORM_FROM,
+        "subject": subject,
+        "resend": response,
     }
 
 

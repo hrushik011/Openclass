@@ -44,5 +44,5 @@ anyio==4.14.2
 python-dotenv
 packaging==26.3
 
-#Resend
-Resend
+# Resend (platform email)
+resend>=2.0.0
