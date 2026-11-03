@@ -210,8 +210,22 @@ def get_batch_student_recipients(batch_id: str) -> list[dict]:
     return list_recipient_students(subject=None, batch_id=batch_id)
 
 
-def _send_platform_email_to_recipients(recipients: list[dict], subject: str, html_content: str) -> int:
+def _send_platform_email_to_recipients(
+    recipients: list[dict],
+    subject: str,
+    html_content: str,
+    *,
+    context: str = "notification",
+) -> int:
     """Send Resend platform email to each unique student address."""
+    targets = sorted({
+        str((row or {}).get("email") or "").strip().lower()
+        for row in (recipients or [])
+        if str((row or {}).get("email") or "").strip()
+    })
+    logger.info("send_platform_email target recipients (%s): %s", context, targets)
+    print(f"send_platform_email target recipients ({context}): {targets}", flush=True)
+
     sent = 0
     seen: set[str] = set()
     for row in recipients or []:
@@ -1297,6 +1311,10 @@ async def create_assignment(
                 created.get("batch_id"),
                 emails,
             )
+            print(
+                f"Assignment {created.get('id')} notification target emails: {emails}",
+                flush=True,
+            )
             if not emails:
                 print(
                     f"Assignment email dispatch found 0 roster emails for "
@@ -1314,7 +1332,12 @@ async def create_assignment(
                 f"Faculty: {html.escape(str(created.get('faculty_name') or ''))}</p>"
                 f"<p>{html.escape(str(created.get('description') or 'Please review the instructions and submit on time.'))}</p>"
             )
-            platform_sent = _send_platform_email_to_recipients(recipients, platform_subject, platform_html)
+            platform_sent = _send_platform_email_to_recipients(
+                recipients,
+                platform_subject,
+                platform_html,
+                context=f"assignment:{created.get('id')}",
+            )
             logger.info(
                 "Assignment %s platform email sent %s/%s students",
                 created.get("id"),
@@ -2121,15 +2144,23 @@ def _dispatch_thread_emails(thread: dict, poster_name: str, poster_role: str, pr
             NotificationService.notify_faculty_direct_message(fac["email"], thread, poster_name, preview)
         return
     if scope == "batch" and str(poster_role).upper() == "FACULTY":
-        recipients = get_batch_student_recipients(thread.get("batch_id") or "")
-        subject = thread.get("subject")
-        if subject:
-            extra = get_notes_student_recipients(subject, thread.get("batch_id"))
-            seen = {r.get("email") for r in recipients}
-            for r in extra:
-                if r.get("email") not in seen:
-                    recipients.append(r)
-                    seen.add(r.get("email"))
+        thread_subject = thread.get("subject")
+        thread_batch = thread.get("batch_id") or ""
+        recipients = list_recipient_students(thread_subject, thread_batch)
+        if not recipients and thread_batch:
+            recipients = list_recipient_students(subject=None, batch_id=thread_batch)
+        logger.info(
+            "Thread %s announcement recipients subject=%r batch=%r emails=%s",
+            thread.get("id"),
+            thread_subject,
+            thread_batch,
+            [r.get("email") for r in recipients],
+        )
+        print(
+            f"Thread {thread.get('id')} announcement target emails: "
+            f"{[r.get('email') for r in recipients]}",
+            flush=True,
+        )
         NotificationService.notify_batch_thread_announcement(recipients, thread, poster_name, preview)
         platform_subject = f"New announcement: {thread.get('title') or 'Course update'}"
         platform_html = (
@@ -2141,7 +2172,12 @@ def _dispatch_thread_emails(thread: dict, poster_name: str, poster_role: str, pr
             f"<p>{html.escape(str(preview or ''))}</p>"
             f"<p>Open <strong>Class Threads</strong> in Openclass to read and reply.</p>"
         )
-        platform_sent = _send_platform_email_to_recipients(recipients, platform_subject, platform_html)
+        platform_sent = _send_platform_email_to_recipients(
+            recipients,
+            platform_subject,
+            platform_html,
+            context=f"thread:{thread.get('id')}",
+        )
         logger.info(
             "Thread %s platform announcement email sent %s/%s students",
             thread.get("id"),

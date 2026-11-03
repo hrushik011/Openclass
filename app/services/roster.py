@@ -344,8 +344,105 @@ def _allocation_matches_target(item: dict, subject: Optional[str], batch_id: Opt
     )
 
 
+def _roll_key_matches_student(roll_key: str, student: dict) -> bool:
+    token = str(roll_key or "").strip()
+    if not token:
+        return False
+    roll_keys = identity_keys(token)
+    student_keys = _row_identity_keys(student)
+    if roll_keys & student_keys:
+        return True
+    roll_compact = {compact_identity(k) for k in roll_keys if compact_identity(k)}
+    student_compact = {compact_identity(k) for k in student_keys if compact_identity(k)}
+    if roll_compact & student_compact:
+        return True
+    for rk in roll_keys:
+        for sk in student_keys:
+            if loose_identity_match(rk, sk):
+                return True
+    return False
+
+
+def _resolve_recipient_for_allocation_key(
+    db,
+    roll_key: Optional[str],
+    students: list[dict],
+    user_rows: list[dict],
+) -> tuple[Optional[str], Optional[str], Optional[str]]:
+    """Map a batch_allocations.roll_no token to an ingested student email (no faculty/session user)."""
+    token = str(roll_key or "").strip()
+    if not token:
+        return None, None, None
+    if "@" in token:
+        return token.strip().lower(), None, token.strip().lower()
+
+    linked = find_ingested_student(
+        db,
+        email=None,
+        name=token if len(token.split()) >= 2 else None,
+        roll_no=token,
+        log_miss=False,
+    )
+    if linked:
+        email = (linked.get("email") or "").strip()
+        if email:
+            return email.lower(), linked.get("name"), linked.get("id")
+
+    for student in students:
+        if _roll_key_matches_student(token, student):
+            email = (student.get("email") or "").strip()
+            if email:
+                return email.lower(), student.get("name"), student.get("id")
+
+    for row in user_rows:
+        if _roll_key_matches_student(token, row):
+            email = (row.get("email") or "").strip()
+            if email:
+                return email.lower(), row.get("name"), None
+
+    return None, None, None
+
+
+def _recipients_from_subscription_store(
+    subject: Optional[str],
+    batch_id: Optional[str],
+    add_recipient,
+) -> None:
+    try:
+        from ..timetable_engine import load_store
+    except Exception:
+        return
+    store = load_store()
+    for item in store.get("subscriptions") or []:
+        subj, batch = extract_subject_and_batch(item.get("subject"), item.get("batch"))
+        row = {
+            "subject": subj or item.get("subject"),
+            "batch": batch or item.get("batch"),
+        }
+        if not _allocation_matches_target(row, subject, batch_id):
+            continue
+        email = (item.get("email") or "").strip().lower()
+        if email and "@" in email:
+            add_recipient(email, item.get("name"), item.get("roll_no"))
+
+
 def list_recipient_students(subject: Optional[str] = None, batch_id: Optional[str] = None) -> list[dict]:
-    """Collect student emails from ingested Students-Testng / Batch Allocation rows."""
+    """Collect student emails for a subject/batch from batch_allocations + ingested students (no faculty user)."""
+    subject = str(subject or "").strip() or None
+    batch_id = str(batch_id or "").strip() or None
+
+    recipients: list[dict] = []
+    seen: set[str] = set()
+    students: list[dict] = []
+    matching_allocations: list[dict] = []
+
+    def add_recipient(email: Optional[str], name: Optional[str] = None, sid: Optional[str] = None):
+        value = (email or "").strip().lower()
+        if not value or "@" not in value or value in seen:
+            return
+        seen.add(value)
+        recipients.append({"id": sid, "name": name or "", "email": value})
+
     with connect() as db:
         students = [
             dict(r)
@@ -355,7 +452,9 @@ def list_recipient_students(subject: Optional[str] = None, batch_id: Optional[st
         ]
         allocations = [
             dict(r)
-            for r in db.execute("SELECT roll_no, subject, batch FROM batch_allocations").fetchall()
+            for r in db.execute(
+                "SELECT roll_no, subject, batch FROM batch_allocations WHERE TRIM(IFNULL(subject, '')) != ''"
+            ).fetchall()
         ]
         user_rows = [
             dict(r)
@@ -364,51 +463,41 @@ def list_recipient_students(subject: Optional[str] = None, batch_id: Optional[st
             ).fetchall()
         ]
 
-    recipients: list[dict] = []
-    seen: set[str] = set()
+        matching_allocations = [
+            item for item in allocations if _allocation_matches_target(item, subject, batch_id)
+        ]
 
-    def add_recipient(email: Optional[str], name: Optional[str] = None, sid: Optional[str] = None):
-        value = (email or "").strip().lower()
-        if not value or "@" not in value or value in seen:
-            return
-        seen.add(value)
-        recipients.append({"id": sid, "name": name or "", "email": value})
+        logger.info(
+            "Recipient lookup subject=%r batch=%r matching_allocation_rows=%s",
+            subject,
+            batch_id,
+            len(matching_allocations),
+        )
 
-    def email_for_key(raw: Optional[str], fallback_name: Optional[str] = None) -> tuple[Optional[str], Optional[str], Optional[str]]:
-        for student in students:
-            if (
-                loose_identity_match(raw, student.get("id"))
-                or loose_identity_match(raw, student.get("email"))
-                or loose_identity_match(raw, student.get("name"))
-                or loose_identity_match(fallback_name, student.get("name"))
-            ):
+        for item in matching_allocations:
+            email, name, sid = _resolve_recipient_for_allocation_key(
+                db, item.get("roll_no"), students, user_rows
+            )
+            add_recipient(email, name, sid)
+
+        if not recipients and matching_allocations:
+            for student in students:
                 email = (student.get("email") or "").strip()
-                if email:
-                    return email, student.get("name"), student.get("id")
-        for row in user_rows:
-            if loose_identity_match(raw, row.get("email")) or loose_identity_match(raw, row.get("name")) or loose_identity_match(fallback_name, row.get("name")):
-                email = (row.get("email") or "").strip()
-                if email:
-                    return email, row.get("name"), None
-        text = str(raw or "").strip()
-        if "@" in text:
-            return text, fallback_name, text
-        return None, fallback_name, None
+                if not email:
+                    continue
+                for item in matching_allocations:
+                    if _roll_key_matches_student(str(item.get("roll_no") or ""), student):
+                        add_recipient(email, student.get("name"), student.get("id"))
+                        break
 
-    matched_any_allocation = False
-    for item in allocations:
-        if not _allocation_matches_target(item, subject, batch_id):
-            continue
-        matched_any_allocation = True
-        email, name, sid = email_for_key(item.get("roll_no"))
-        add_recipient(email, name, sid)
+        if not recipients and (is_all_batches(batch_id) or not matching_allocations):
+            for student in students:
+                if subject and matching_allocations:
+                    continue
+                if is_all_batches(batch_id) or batches_compatible(batch_id, student.get("batch_id")):
+                    add_recipient(student.get("email"), student.get("name"), student.get("id"))
 
-    if not matched_any_allocation or is_all_batches(batch_id):
-        for student in students:
-            if subject and matched_any_allocation:
-                continue
-            if is_all_batches(batch_id) or batches_compatible(batch_id, student.get("batch_id")):
-                add_recipient(student.get("email"), student.get("name"), student.get("id"))
+    _recipients_from_subscription_store(subject, batch_id, add_recipient)
 
     if not recipients:
         logger.warning(
@@ -416,11 +505,19 @@ def list_recipient_students(subject: Optional[str] = None, batch_id: Optional[st
             subject,
             batch_id,
             [s.get("email") or s.get("id") for s in students[:40]],
-            [str(r.get("roll_no")) for r in allocations[:40]],
+            [str(r.get("roll_no")) for r in matching_allocations[:40]],
         )
         print(
             f"Assignment recipient lookup returned 0 emails subject={subject!r} batch={batch_id!r}",
             flush=True,
+        )
+    else:
+        logger.info(
+            "Recipient lookup resolved %s emails for subject=%r batch=%r: %s",
+            len(recipients),
+            subject,
+            batch_id,
+            [r.get("email") for r in recipients],
         )
     return recipients
 
