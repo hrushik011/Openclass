@@ -1,4 +1,5 @@
 import hashlib
+import html
 import json
 import logging
 import re
@@ -55,6 +56,7 @@ from .config import (
     microsoft_oauth_tenant,
 )
 from .db import connect, initialize, now
+from .email import send_platform_email
 from .gmail_sender import send_email
 from .google_meet import build_meeting_launch_url, create_meeting_space
 from .services.assignment import (
@@ -206,6 +208,21 @@ def saved_credentials() -> Optional[str]:
 
 def get_batch_student_recipients(batch_id: str) -> list[dict]:
     return list_recipient_students(subject=None, batch_id=batch_id)
+
+
+def _send_platform_email_to_recipients(recipients: list[dict], subject: str, html_content: str) -> int:
+    """Send Resend platform email to each unique student address."""
+    sent = 0
+    seen: set[str] = set()
+    for row in recipients or []:
+        email = str((row or {}).get("email") or "").strip()
+        key = email.lower()
+        if not email or "@" not in email or key in seen:
+            continue
+        seen.add(key)
+        if send_platform_email(email, subject, html_content):
+            sent += 1
+    return sent
 
 
 def recipients_for_subject_batch(subject: str, batch_id: Optional[str] = None) -> list[dict]:
@@ -1287,6 +1304,23 @@ async def create_assignment(
                     flush=True,
                 )
             sent = NotificationService.broadcast_assignment_created(created, recipients)
+            platform_subject = f"New assignment: {created.get('title') or 'Assignment'}"
+            platform_html = (
+                f"<p>A new assignment was published in <strong>Openclass</strong>.</p>"
+                f"<p><strong>{html.escape(str(created.get('title') or 'Assignment'))}</strong></p>"
+                f"<p>Subject: {html.escape(str(created.get('subject') or ''))}<br>"
+                f"Batch: {html.escape(str(created.get('batch_id') or ''))}<br>"
+                f"Deadline: {html.escape(str(created.get('deadline') or ''))}<br>"
+                f"Faculty: {html.escape(str(created.get('faculty_name') or ''))}</p>"
+                f"<p>{html.escape(str(created.get('description') or 'Please review the instructions and submit on time.'))}</p>"
+            )
+            platform_sent = _send_platform_email_to_recipients(recipients, platform_subject, platform_html)
+            logger.info(
+                "Assignment %s platform email sent %s/%s students",
+                created.get("id"),
+                platform_sent,
+                len(recipients),
+            )
             logger.info("Assignment %s notified %s/%s students", created.get("id"), sent, len(recipients))
         except Exception as exc:
             logger.exception("Assignment email dispatch failed: %s", exc)
@@ -2097,6 +2131,23 @@ def _dispatch_thread_emails(thread: dict, poster_name: str, poster_role: str, pr
                     recipients.append(r)
                     seen.add(r.get("email"))
         NotificationService.notify_batch_thread_announcement(recipients, thread, poster_name, preview)
+        platform_subject = f"New announcement: {thread.get('title') or 'Course update'}"
+        platform_html = (
+            f"<p>A new class announcement was posted in <strong>Openclass</strong>.</p>"
+            f"<p><strong>{html.escape(str(thread.get('title') or 'Announcement'))}</strong></p>"
+            f"<p>Batch: {html.escape(str(thread.get('batch_id') or ''))}<br>"
+            f"Subject: {html.escape(str(thread.get('subject') or 'Course'))}<br>"
+            f"From: {html.escape(str(poster_name))}</p>"
+            f"<p>{html.escape(str(preview or ''))}</p>"
+            f"<p>Open <strong>Class Threads</strong> in Openclass to read and reply.</p>"
+        )
+        platform_sent = _send_platform_email_to_recipients(recipients, platform_subject, platform_html)
+        logger.info(
+            "Thread %s platform announcement email sent %s/%s students",
+            thread.get("id"),
+            platform_sent,
+            len(recipients),
+        )
 
 
 @app.get("/api/threads")
