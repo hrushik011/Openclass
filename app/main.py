@@ -529,18 +529,15 @@ def test_platform_email(
     if "@" not in target:
         raise HTTPException(status_code=400, detail="A valid email address is required.")
 
-    body = (payload.message or "").strip() or (
-        "This is a test message from Openclass. If you received this, Resend is configured correctly."
-    )
-    html = (
-        f"<p>{html.escape(body)}</p>"
-        f"<p style='color:#64748b;font-size:12px;'>Sent via Openclass platform email · {PLATFORM_FROM}</p>"
-    )
+    body_text = payload.message or "This is a test message from Openclass. If you received this, Resend is configured correctly."
+    body = body_text.strip()
+
+    html_body = f"<p>{html.escape(body)}</p><p style='color:#64748b;font-size:12px;'>Sent via Openclass platform email · {PLATFORM_FROM}</p>"
     subject = (payload.subject or "Openclass Resend connectivity test").strip()
     logger.info("API /api/test-email requested to=%s by role=%s", target, role or "anonymous")
     print(f"/api/test-email requested to={target} by role={role or 'anonymous'}", flush=True)
 
-    response = send_platform_email(target, subject, html)
+    response = send_platform_email(target, subject, html_body)
     if not response:
         raise HTTPException(
             status_code=502,
