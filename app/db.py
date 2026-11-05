@@ -132,6 +132,15 @@ CREATE TABLE IF NOT EXISTS assignment_reminder_logs (
     UNIQUE(assignment_id, student_id, reminder_type)
 );
 
+CREATE TABLE IF NOT EXISTS class_reminder_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    class_session_id INTEGER NOT NULL,
+    recipient_email TEXT NOT NULL,
+    reminder_type TEXT NOT NULL,
+    sent_at TEXT NOT NULL,
+    UNIQUE(class_session_id, recipient_email, reminder_type)
+);
+
 CREATE TABLE IF NOT EXISTS reminder_jobs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     class_session_id INTEGER UNIQUE,
@@ -410,6 +419,8 @@ def initialize():
         _add_column_if_missing(db, "class_sessions", "google_meet_url", "TEXT")
         _add_column_if_missing(db, "class_sessions", "faculty_id", "INTEGER")
         _add_column_if_missing(db, "class_sessions", "is_conducted", "INTEGER DEFAULT 0")
+        _add_column_if_missing(db, "class_sessions", "start_reminder_sent", "INTEGER NOT NULL DEFAULT 0")
+        _add_column_if_missing(db, "class_sessions", "publish_notice_sent", "INTEGER NOT NULL DEFAULT 0")
         _add_column_if_missing(db, "assignments", "subject", "TEXT")
         _add_column_if_missing(db, "assignments", "faculty_id", "INTEGER")
         _add_column_if_missing(db, "assignments", "faculty_name", "TEXT")

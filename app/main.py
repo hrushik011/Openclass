@@ -56,7 +56,14 @@ from .config import (
     microsoft_oauth_tenant,
 )
 from .db import connect, initialize, now
-from .email import PLATFORM_FROM, send_platform_email
+from .email import (
+    CATEGORY_ANNOUNCEMENT,
+    CATEGORY_TEST,
+    PLATFORM_FROM,
+    build_email_tags,
+    prefix_subject,
+    send_platform_email,
+)
 from .gmail_sender import send_email
 from .google_meet import build_meeting_launch_url, create_meeting_space
 from .services.assignment import (
@@ -65,7 +72,11 @@ from .services.assignment import (
     save_student_submission,
 )
 from .services.notification import NotificationService
-from .services.reminders import check_and_send_assignment_reminders
+from .services.reminders import run_scheduled_email_jobs
+from .services.platform_notifications import (
+    notify_assignment_published,
+    notify_class_session_published,
+)
 from .services.roster import (
     assignment_visible_to_student,
     batches_compatible,
@@ -216,6 +227,10 @@ def _send_platform_email_to_recipients(
     html_content: str,
     *,
     context: str = "notification",
+    category: Optional[str] = None,
+    tags: Optional[list] = None,
+    headers: Optional[dict] = None,
+    expires_at=None,
 ) -> int:
     """Send Resend platform email to each unique student address."""
     targets = sorted({
@@ -234,7 +249,15 @@ def _send_platform_email_to_recipients(
         if not email or "@" not in email or key in seen:
             continue
         seen.add(key)
-        if send_platform_email(email, subject, html_content):
+        if send_platform_email(
+            email,
+            subject,
+            html_content,
+            category=category,
+            tags=tags,
+            headers=headers,
+            expires_at=expires_at,
+        ):
             sent += 1
     return sent
 
@@ -297,12 +320,11 @@ def startup():
         logger.warning("Could not rebuild faculty subject roster: %s", exc)
     try:
         scheduler.start()
-        # Schedule assignment reminder job every 2 hours
         scheduler.add_job(
-            check_and_send_assignment_reminders,
+            run_scheduled_email_jobs,
             "interval",
-            hours=2,
-            id="assignment-reminders-job",
+            seconds=60,
+            id="openclass-email-jobs",
             replace_existing=True,
         )
     except Exception as e:
@@ -533,11 +555,17 @@ def test_platform_email(
     body = body_text.strip()
 
     html_body = f"<p>{html.escape(body)}</p><p style='color:#64748b;font-size:12px;'>Sent via Openclass platform email · {PLATFORM_FROM}</p>"
-    subject = (payload.subject or "Openclass Resend connectivity test").strip()
+    subject = prefix_subject("[Test]", (payload.subject or "Openclass Resend connectivity test").strip())
     logger.info("API /api/test-email requested to=%s by role=%s", target, role or "anonymous")
     print(f"/api/test-email requested to={target} by role={role or 'anonymous'}", flush=True)
 
-    response = send_platform_email(target, subject, html_body)
+    response = send_platform_email(
+        target,
+        subject,
+        html_body,
+        category=CATEGORY_TEST,
+        tags=build_email_tags(CATEGORY_TEST),
+    )
     if not response:
         raise HTTPException(
             status_code=502,
@@ -832,23 +860,24 @@ def create_sudden_class(payload: dict, background_tasks: BackgroundTasks):
             ),
         )
         session_id = cursor.lastrowid
-
-    # Background email blast
-    recipients = recipients_for_subject_batch(payload.get("subject"), batch)
-    if payload.get("faculty_email"):
-        recipients.append({"email": payload.get("faculty_email"), "name": faculty_name})
+        session_row = dict(
+            db.execute("SELECT * FROM class_sessions WHERE id = ?", (session_id,)).fetchone()
+        )
 
     def dispatch_sudden_class_emails():
-        subject_line = f"🚨 Sudden Class Scheduled: {payload.get('subject')} ({batch})"
-        body_text = (
-            f"A replacement session for {payload.get('subject')} has been scheduled for {payload.get('class_date')} at {payload.get('start_time')}.\n\n"
-            f"Join Google Meet (Strict Host Controls Active):\n{meeting_url}\n\n"
-            f"Faculty Host: {faculty_name}\n"
-            f"Openclass Academic System"
-        )
-        for r in recipients:
-            if r.get("email"):
-                NotificationService.send_email(r["email"], subject_line, body_text)
+        try:
+            sent = notify_class_session_published(
+                session_row,
+                faculty_email=payload.get("faculty_email"),
+            )
+            with connect() as db:
+                db.execute(
+                    "UPDATE class_sessions SET publish_notice_sent = 1, updated_at = ? WHERE id = ?",
+                    (now(), session_id),
+                )
+            logger.info("Sudden class %s publish emails sent=%s", session_id, sent)
+        except Exception as exc:
+            logger.exception("Sudden class email dispatch failed session=%s: %s", session_id, exc)
 
     background_tasks.add_task(dispatch_sudden_class_emails)
 
@@ -857,7 +886,7 @@ def create_sudden_class(payload: dict, background_tasks: BackgroundTasks):
         "session_id": session_id,
         "meeting_url": meeting_url,
         "host_controls": meet_data["host_controls"],
-        "emails_queued": len(recipients),
+        "emails_queued": len(recipients_for_subject_batch(payload.get("subject"), batch)),
     }
 
 
@@ -1347,51 +1376,12 @@ async def create_assignment(
 
     def dispatch_assignment_announcement():
         try:
-            recipients = list_recipient_students(created.get("subject"), created.get("batch_id"))
-            if not recipients:
-                recipients = list_recipient_students(subject=None, batch_id=created.get("batch_id"))
-            emails = [row.get("email") for row in recipients if row.get("email")]
+            platform_sent = notify_assignment_published(created)
             logger.info(
-                "Assignment %s email loop subject=%r batch=%r recipients=%s",
-                created.get("id"),
-                created.get("subject"),
-                created.get("batch_id"),
-                emails,
-            )
-            print(
-                f"Assignment {created.get('id')} notification target emails: {emails}",
-                flush=True,
-            )
-            if not emails:
-                print(
-                    f"Assignment email dispatch found 0 roster emails for "
-                    f"subject={created.get('subject')!r} batch={created.get('batch_id')!r}",
-                    flush=True,
-                )
-            sent = NotificationService.broadcast_assignment_created(created, recipients)
-            platform_subject = f"New assignment: {created.get('title') or 'Assignment'}"
-            platform_html = (
-                f"<p>A new assignment was published in <strong>Openclass</strong>.</p>"
-                f"<p><strong>{html.escape(str(created.get('title') or 'Assignment'))}</strong></p>"
-                f"<p>Subject: {html.escape(str(created.get('subject') or ''))}<br>"
-                f"Batch: {html.escape(str(created.get('batch_id') or ''))}<br>"
-                f"Deadline: {html.escape(str(created.get('deadline') or ''))}<br>"
-                f"Faculty: {html.escape(str(created.get('faculty_name') or ''))}</p>"
-                f"<p>{html.escape(str(created.get('description') or 'Please review the instructions and submit on time.'))}</p>"
-            )
-            platform_sent = _send_platform_email_to_recipients(
-                recipients,
-                platform_subject,
-                platform_html,
-                context=f"assignment:{created.get('id')}",
-            )
-            logger.info(
-                "Assignment %s platform email sent %s/%s students",
+                "Assignment %s publish emails dispatched to %s roster recipients",
                 created.get("id"),
                 platform_sent,
-                len(recipients),
             )
-            logger.info("Assignment %s notified %s/%s students", created.get("id"), sent, len(recipients))
         except Exception as exc:
             logger.exception("Assignment email dispatch failed: %s", exc)
             print(f"Assignment email dispatch failed: {exc}", flush=True)
@@ -2078,12 +2068,13 @@ def faculty_attendance_summary(
 
 @app.post("/api/reminders/trigger")
 def trigger_reminders():
-    """Manual or automated trigger for scheduled deadline reminders."""
-    sent_count = check_and_send_assignment_reminders()
+    """Manual trigger for scheduled class + assignment email jobs."""
+    summary = run_scheduled_email_jobs()
+    total = summary.get("class_start_reminders", 0) + summary.get("assignment_reminders", 0)
     return {
         "status": "success",
-        "reminders_dispatched": sent_count,
-        "detail": f"Evaluated batches and dispatched {sent_count} deadline reminders.",
+        "reminders_dispatched": total,
+        "detail": summary,
     }
 
 
@@ -2209,7 +2200,7 @@ def _dispatch_thread_emails(thread: dict, poster_name: str, poster_role: str, pr
             flush=True,
         )
         NotificationService.notify_batch_thread_announcement(recipients, thread, poster_name, preview)
-        platform_subject = f"New announcement: {thread.get('title') or 'Course update'}"
+        platform_subject = prefix_subject("[Announcement]", f"{thread.get('title') or 'Course update'}")
         platform_html = (
             f"<p>A new class announcement was posted in <strong>Openclass</strong>.</p>"
             f"<p><strong>{html.escape(str(thread.get('title') or 'Announcement'))}</strong></p>"
@@ -2224,6 +2215,8 @@ def _dispatch_thread_emails(thread: dict, poster_name: str, poster_role: str, pr
             platform_subject,
             platform_html,
             context=f"thread:{thread.get('id')}",
+            category=CATEGORY_ANNOUNCEMENT,
+            tags=build_email_tags(CATEGORY_ANNOUNCEMENT, thread_id=str(thread.get("id") or "")),
         )
         logger.info(
             "Thread %s platform announcement email sent %s/%s students",
