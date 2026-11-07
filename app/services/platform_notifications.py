@@ -161,38 +161,48 @@ def build_class_start_reminder_html(session: dict, meet_url: Optional[str] = Non
     )
 
 
-def build_assignment_reminder_html(assignment: dict, reminder_tier: str) -> str:
+def build_assignment_reminder_html(assignment: dict, milestone: str) -> str:
     title = html.escape(str(assignment.get("title") or "Assignment"))
     deadline_raw = str(assignment.get("deadline") or "")
     subj = html.escape(str(assignment.get("subject") or ""))
-    tier = html.escape(reminder_tier)
+    label = html.escape(_milestone_display_label(milestone))
+    urgent = milestone in {"due_24h", "due_12h"}
     return (
-        f"<p>Reminder ({tier}): assignment deadline approaching in <strong>Openclass</strong>.</p>"
+        f"<p><strong>{label}</strong> — assignment timeline update in <strong>Openclass</strong>.</p>"
         f"<p><strong>{title}</strong></p>"
         f"<p>Subject: {subj}</p>"
-        f"{_deadline_highlight_html(deadline_raw, urgent=True)}"
+        f"{_deadline_highlight_html(deadline_raw, urgent=urgent)}"
         f"<p>Please submit before the deadline shown above.</p>"
     )
 
 
+def _milestone_display_label(milestone: str) -> str:
+    labels = {
+        "created": "New assignment published",
+        "midway": "Midway check-in (~50% of time elapsed)",
+        "due_3d": "3 days remaining",
+        "due_24h": "24 hours remaining",
+        "due_12h": "12 hours remaining",
+    }
+    return labels.get(milestone, milestone.replace("_", " ").title())
+
+
 def notify_assignment_published(assignment: dict) -> int:
+    from .reminders import dispatch_assignment_milestone_emails, MILESTONE_CREATED
+
     recipients = list_recipient_students(assignment.get("subject"), assignment.get("batch_id"))
     if not recipients:
         recipients = list_recipient_students(subject=None, batch_id=assignment.get("batch_id"))
-    subject_line = prefix_subject(
-        "[Assignment]",
-        f"New: {assignment.get('title') or 'Assignment'} — due {assignment.get('deadline') or 'TBD'}",
-    )
-    html_body = build_assignment_published_html(assignment)
-    ctx = f"assignment:published:{assignment.get('id')}"
-    return send_platform_email_to_roster(
+    return dispatch_assignment_milestone_emails(
+        assignment,
+        MILESTONE_CREATED,
         recipients,
-        subject_line,
-        html_body,
-        context=ctx,
+        html_builder=build_assignment_published_html,
+        subject_builder=lambda a: prefix_subject(
+            "[Assignment]",
+            f"New: {a.get('title') or 'Assignment'} — due {a.get('deadline') or 'TBD'}",
+        ),
         category=CATEGORY_ASSIGNMENT_NEW,
-        tags=build_email_tags(CATEGORY_ASSIGNMENT_NEW, assignment_id=str(assignment.get("id") or "")),
-        headers=assignment_notice_headers(deadline_iso=str(assignment.get("deadline") or "")),
     )
 
 

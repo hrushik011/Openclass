@@ -5,7 +5,6 @@ from zoneinfo import ZoneInfo
 
 from ..db import connect, now
 from ..email import (
-    CATEGORY_ASSIGNMENT_REMINDER,
     assignment_notice_headers,
     build_email_tags,
     prefix_subject,
@@ -20,6 +19,207 @@ from .roster import list_recipient_students, normalize_time_label
 
 logger = logging.getLogger("openclass.reminders")
 TIMEZONE = ZoneInfo("Asia/Kolkata")
+
+MILESTONE_CREATED = "created"
+MILESTONE_MIDWAY = "midway"
+MILESTONE_DUE_3D = "due_3d"
+MILESTONE_DUE_24H = "due_24h"
+MILESTONE_DUE_12H = "due_12h"
+
+SHORT_LIFESPAN_HOURS = 72  # < 3 days → skip midway + due_3d
+_SCHEDULER_WINDOW_HOURS = 1.0
+
+
+def _parse_assignment_dt(raw: Optional[str]) -> Optional[datetime]:
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    try:
+        dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            return dt.replace(tzinfo=TIMEZONE)
+        return dt.astimezone(TIMEZONE)
+    except Exception:
+        return None
+
+
+def _student_id(row: dict) -> str:
+    return str(row.get("id") or row.get("email") or "").strip()
+
+
+def _assignment_reminder_logged(db, assignment_id: int, student_id: str, milestone: str) -> bool:
+    row = db.execute(
+        """
+        SELECT 1 FROM assignment_reminder_logs
+        WHERE assignment_id = ? AND student_id = ? AND reminder_type = ?
+        """,
+        (assignment_id, student_id, milestone),
+    ).fetchone()
+    return bool(row)
+
+
+def _log_assignment_reminder(db, assignment_id: int, student_id: str, milestone: str) -> None:
+    db.execute(
+        """
+        INSERT OR IGNORE INTO assignment_reminder_logs (assignment_id, student_id, reminder_type, sent_at)
+        VALUES (?, ?, ?, ?)
+        """,
+        (assignment_id, student_id, milestone, now()),
+    )
+
+
+def _submitted_student_ids(assignment_id: int) -> set[str]:
+    with connect() as db:
+        return {
+            str(r[0])
+            for r in db.execute(
+                "SELECT student_id FROM submissions WHERE assignment_id = ?",
+                (assignment_id,),
+            ).fetchall()
+        }
+
+
+def active_assignment_milestones(assignment: dict, ref: Optional[datetime] = None) -> list[str]:
+    """
+    Milestones from proportional timeline (deadline − created_at).
+    Short assignments (<3 days): only 24h and 12h (creation is immediate on publish).
+    """
+    ref = ref or datetime.now(TIMEZONE)
+    deadline_dt = _parse_assignment_dt(assignment.get("deadline"))
+    created_dt = _parse_assignment_dt(assignment.get("created_at"))
+    if not deadline_dt or not created_dt:
+        return []
+
+    lifespan = deadline_dt - created_dt
+    if lifespan.total_seconds() <= 0:
+        return []
+
+    remaining = deadline_dt - ref
+    if remaining.total_seconds() <= 0:
+        return []
+
+    lifespan_h = lifespan.total_seconds() / 3600.0
+    remaining_h = remaining.total_seconds() / 3600.0
+    elapsed_h = (ref - created_dt).total_seconds() / 3600.0
+    short = lifespan_h < SHORT_LIFESPAN_HOURS
+
+    def near(value: float, target: float, window: float = _SCHEDULER_WINDOW_HOURS) -> bool:
+        return abs(value - target) <= window
+
+    milestones: list[str] = []
+
+    if not short:
+        midway_target = lifespan_h * 0.5
+        window = max(_SCHEDULER_WINDOW_HOURS, lifespan_h * 0.03)
+        if near(elapsed_h, midway_target, window):
+            milestones.append(MILESTONE_MIDWAY)
+        if near(remaining_h, 72, window=1.5):
+            milestones.append(MILESTONE_DUE_3D)
+
+    if near(remaining_h, 24):
+        milestones.append(MILESTONE_DUE_24H)
+    if near(remaining_h, 12, window=0.75):
+        milestones.append(MILESTONE_DUE_12H)
+
+    return milestones
+
+
+def _milestone_subject(assignment: dict, milestone: str) -> str:
+    labels = {
+        MILESTONE_CREATED: "New",
+        MILESTONE_MIDWAY: "Midway check-in",
+        MILESTONE_DUE_3D: "3 days left",
+        MILESTONE_DUE_24H: "24 hours left",
+        MILESTONE_DUE_12H: "12 hours left",
+    }
+    tag = labels.get(milestone, milestone)
+    title = assignment.get("title") or "Assignment"
+    due = assignment.get("deadline") or ""
+    return prefix_subject(f"[Assignment · {tag}]", f"{title} — due {due}")
+
+
+def dispatch_assignment_milestone_emails(
+    assignment: dict,
+    milestone: str,
+    recipients: list[dict],
+    *,
+    html_builder=None,
+    subject_builder=None,
+    category=None,
+) -> int:
+    """Send one milestone email per student; skip submitted; log once per (assignment, student, milestone)."""
+    from ..email import CATEGORY_ASSIGNMENT_NEW, CATEGORY_ASSIGNMENT_REMINDER
+
+    assignment_id = int(assignment.get("id") or 0)
+    if not assignment_id:
+        return 0
+
+    category = category or (
+        CATEGORY_ASSIGNMENT_NEW if milestone == MILESTONE_CREATED else CATEGORY_ASSIGNMENT_REMINDER
+    )
+    submitted = _submitted_student_ids(assignment_id)
+    sent = 0
+
+    if html_builder:
+        html_body = html_builder(assignment)
+    else:
+        html_body = build_assignment_reminder_html(assignment, milestone)
+
+    subject_line = subject_builder(assignment) if subject_builder else _milestone_subject(assignment, milestone)
+
+    with connect() as db:
+        for row in recipients or []:
+            student_id = _student_id(row)
+            student_email = str(row.get("email") or "").strip().lower()
+            if not student_email or "@" not in student_email:
+                continue
+            if student_id in submitted or student_email in submitted:
+                continue
+            if _assignment_reminder_logged(db, assignment_id, student_id, milestone):
+                continue
+            try:
+                response = send_platform_email(
+                    student_email,
+                    subject_line,
+                    html_body,
+                    category=category,
+                    tags=build_email_tags(
+                        category,
+                        assignment_id=str(assignment_id),
+                        milestone=milestone,
+                    ),
+                    headers=assignment_notice_headers(deadline_iso=str(assignment.get("deadline") or "")),
+                )
+                if not response:
+                    logger.warning(
+                        "Assignment milestone FAILED milestone=%s assignment=%s to=%s",
+                        milestone,
+                        assignment_id,
+                        student_email,
+                    )
+                    continue
+                _log_assignment_reminder(db, assignment_id, student_id, milestone)
+                sent += 1
+                logger.info(
+                    "Assignment milestone SUCCESS milestone=%s assignment=%s to=%s",
+                    milestone,
+                    assignment_id,
+                    student_email,
+                )
+                print(
+                    f"Assignment milestone SUCCESS {milestone} assignment={assignment_id} to={student_email}",
+                    flush=True,
+                )
+            except Exception as exc:
+                logger.exception(
+                    "Assignment milestone ERROR milestone=%s assignment=%s to=%s: %s",
+                    milestone,
+                    assignment_id,
+                    student_email,
+                    exc,
+                )
+        db.commit()
+    return sent
 
 
 def _session_start_dt(session: dict, ref: datetime) -> Optional[datetime]:
@@ -157,8 +357,8 @@ def check_and_send_class_start_reminders() -> int:
 
 def check_and_send_assignment_reminders() -> int:
     """
-    Scan assignments and send deadline reminder emails (2h / 24h / 3d / 7d tiers).
-    Uses send_platform_email and assignment_reminder_logs for deduplication.
+    Proportional assignment timeline reminders (midway, 3d, 24h, 12h).
+    Creation emails fire immediately on publish (milestone `created`).
     """
     total_reminders_sent = 0
     ref = datetime.now(TIMEZONE)
@@ -167,138 +367,22 @@ def check_and_send_assignment_reminders() -> int:
         assignments = [dict(r) for r in db.execute("SELECT * FROM assignments").fetchall()]
 
     for assignment in assignments:
-        deadline_str = assignment.get("deadline")
-        if not deadline_str:
-            continue
-
-        try:
-            deadline_clean = deadline_str.replace("Z", "+00:00")
-            deadline_dt = datetime.fromisoformat(deadline_clean)
-            if deadline_dt.tzinfo is None:
-                deadline_dt = deadline_dt.replace(tzinfo=TIMEZONE)
-            else:
-                deadline_dt = deadline_dt.astimezone(TIMEZONE)
-        except Exception as exc:
-            logger.error(
-                "Invalid deadline for assignment %s: %s (%s)",
-                assignment.get("id"),
-                deadline_str,
-                exc,
-            )
-            continue
-
-        diff = deadline_dt - ref
-        total_hours = diff.total_seconds() / 3600.0
-        if total_hours <= 0:
-            continue
-
-        reminder_tier = None
-        if total_hours <= 2.5:
-            reminder_tier = "2h"
-        elif total_hours <= 25.0 and total_hours > 20.0:
-            reminder_tier = "24h"
-        elif total_hours <= 73.0 and total_hours > 68.0:
-            reminder_tier = "3d"
-        elif total_hours <= 169.0 and total_hours > 164.0:
-            reminder_tier = "7d"
-
-        if not reminder_tier:
-            continue
-
         assignment_id = assignment.get("id")
+        milestones = active_assignment_milestones(assignment, ref)
+        if not milestones:
+            continue
+
         batch_id = assignment.get("batch_id")
         students = list_recipient_students(subject=assignment.get("subject"), batch_id=batch_id)
         if not students:
             students = list_recipient_students(subject=None, batch_id=batch_id)
 
-        with connect() as db:
-            submitted_ids = {
-                str(r[0])
-                for r in db.execute(
-                    "SELECT student_id FROM submissions WHERE assignment_id = ?",
-                    (assignment_id,),
-                ).fetchall()
-            }
-
-        students = [
-            s for s in students
-            if str(s.get("id") or s.get("email") or "") not in submitted_ids
-        ]
-
-        subject_line = prefix_subject(
-            f"[Assignment Reminder {reminder_tier}]",
-            f"{assignment.get('title') or 'Assignment'} — due {assignment.get('deadline') or ''}",
-        )
-        html_body = build_assignment_reminder_html(assignment, reminder_tier)
-        ctx = f"assignment:reminder:{assignment_id}:{reminder_tier}"
-
-        for student in students:
-            student_id = str(student.get("id") or student.get("email") or "")
-            student_email = str(student.get("email") or "").strip().lower()
-            if not student_email or "@" not in student_email:
-                continue
-
-            with connect() as db:
-                logged = db.execute(
-                    """
-                    SELECT 1 FROM assignment_reminder_logs
-                    WHERE assignment_id = ? AND student_id = ? AND reminder_type = ?
-                    """,
-                    (assignment_id, student_id, reminder_tier),
-                ).fetchone()
-                if logged:
-                    continue
-
-            try:
-                response = send_platform_email(
-                    student_email,
-                    subject_line,
-                    html_body,
-                    category=CATEGORY_ASSIGNMENT_REMINDER,
-                    tags=build_email_tags(
-                        CATEGORY_ASSIGNMENT_REMINDER,
-                        assignment_id=str(assignment_id),
-                        tier=reminder_tier,
-                    ),
-                    headers=assignment_notice_headers(deadline_iso=str(assignment.get("deadline") or "")),
-                )
-                if not response:
-                    logger.warning(
-                        "Assignment reminder FAILED tier=%s assignment=%s to=%s",
-                        reminder_tier,
-                        assignment_id,
-                        student_email,
-                    )
-                    continue
-                with connect() as db:
-                    db.execute(
-                        """
-                        INSERT OR IGNORE INTO assignment_reminder_logs
-                        (assignment_id, student_id, reminder_type, sent_at)
-                        VALUES (?, ?, ?, ?)
-                        """,
-                        (assignment_id, student_id, reminder_tier, now()),
-                    )
-                    db.commit()
-                total_reminders_sent += 1
-                logger.info(
-                    "Assignment reminder SUCCESS tier=%s assignment=%s to=%s",
-                    reminder_tier,
-                    assignment_id,
-                    student_email,
-                )
-                print(
-                    f"Assignment reminder SUCCESS tier={reminder_tier} assignment={assignment_id} to={student_email}",
-                    flush=True,
-                )
-            except Exception as exc:
-                logger.exception(
-                    "Assignment reminder ERROR tier=%s assignment=%s to=%s: %s",
-                    reminder_tier,
-                    assignment_id,
-                    student_email,
-                    exc,
-                )
+        for milestone in milestones:
+            total_reminders_sent += dispatch_assignment_milestone_emails(
+                assignment,
+                milestone,
+                students,
+            )
 
     return total_reminders_sent
 

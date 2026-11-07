@@ -127,7 +127,7 @@ CREATE TABLE IF NOT EXISTS assignment_reminder_logs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     assignment_id INTEGER NOT NULL,
     student_id TEXT NOT NULL,
-    reminder_type TEXT NOT NULL, -- '24h', '2h', or '3d'
+    reminder_type TEXT NOT NULL, -- created, midway, due_3d, due_24h, due_12h
     sent_at TEXT NOT NULL,
     UNIQUE(assignment_id, student_id, reminder_type)
 );
