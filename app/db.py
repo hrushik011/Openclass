@@ -187,6 +187,20 @@ CREATE TABLE IF NOT EXISTS attendance_records (
     UNIQUE(student_id, class_id)
 );
 
+CREATE TABLE IF NOT EXISTS student_subject_attendance (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    student_id TEXT NOT NULL,
+    student_name TEXT,
+    batch_id TEXT,
+    subject TEXT NOT NULL,
+    classes_attended INTEGER NOT NULL DEFAULT 0,
+    total_classes INTEGER NOT NULL DEFAULT 0,
+    source TEXT NOT NULL DEFAULT 'faculty_upload',
+    uploaded_by TEXT,
+    updated_at TEXT NOT NULL,
+    UNIQUE(student_id, subject)
+);
+
 CREATE TABLE IF NOT EXISTS threads (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     title TEXT NOT NULL,

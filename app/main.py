@@ -2,6 +2,7 @@ import hashlib
 import html
 import json
 import logging
+import os
 import re
 import secrets
 import shutil
@@ -73,6 +74,9 @@ from .services.assignment import (
 )
 from .services.notification import NotificationService
 from .services.reminders import run_scheduled_email_jobs
+from .services.ai_gemini import gather_study_context, gemini_email_draft, gemini_study_answer, get_genai_client
+from .services.file_convert import convert_document
+from .services.attendance_upload import apply_attendance_rows, fetch_subject_snapshots, parse_attendance_upload
 from .services.platform_notifications import (
     notify_assignment_published,
     notify_class_session_published,
@@ -767,12 +771,39 @@ def student_dashboard(current_user: dict = Depends(require_student)):
     }
 
 
+def _assert_student_attendance_access(student_id: str, current_user: Optional[dict]) -> None:
+    if not current_user:
+        raise HTTPException(status_code=401, detail="Sign in required")
+    role = str(current_user.get("role") or "").upper()
+    if role == "FACULTY":
+        return
+    allowed = {
+        str(current_user.get("id") or ""),
+        str(current_user.get("roll_no") or ""),
+        str(current_user.get("roster_id") or ""),
+        str(current_user.get("student_id") or ""),
+    }
+    allowed = {x for x in allowed if x and x != "None"}
+    if student_id not in allowed:
+        raise HTTPException(status_code=403, detail="Cannot view another student's attendance")
+
+
 @app.get("/api/student/attendance")
 def student_attendance_me(current_user: dict = Depends(require_student)):
     return get_student_attendance(
         student_id=str(current_user.get("roster_id") or current_user.get("id")),
         current_user=current_user,
     )
+
+
+@app.get("/api/student/attendance/{student_id}")
+def student_attendance_by_id(
+    student_id: str,
+    current_user: dict = Depends(get_optional_current_user),
+):
+    """Subject-wise attendance breakdown and overall aggregate for student dashboards."""
+    _assert_student_attendance_access(student_id, current_user)
+    return get_student_attendance(student_id=student_id, current_user=current_user)
 
 
 @app.get("/api/classes/{session_id}/meet-link")
@@ -1505,6 +1536,54 @@ def export_assignment_zip(assignment_id: int):
 # --- Attendance Tracking ---
 
 
+@app.post("/api/faculty/upload-attendance")
+async def faculty_upload_attendance(
+    file: UploadFile = File(...),
+    current_user: dict = Depends(require_faculty),
+):
+    """
+    Ingest faculty CSV/Excel with student IDs, subject codes, classes attended, and total classes held.
+    Upserts student_subject_attendance for student dashboard percentages.
+    """
+    original = (file.filename or "attendance.csv").strip()
+    suffix = Path(original).suffix.lower()
+    if suffix not in {".csv", ".xlsx", ".xls"}:
+        raise HTTPException(status_code=400, detail="Upload a .csv or .xlsx attendance file")
+
+    content = await file.read()
+    if len(content) > 10 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="File too large (max 10MB)")
+
+    upload_dir = Path(UPLOAD_DIR) / "attendance_uploads"
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    import uuid
+
+    token = uuid.uuid4().hex
+    src_path = upload_dir / f"roll-{token}{suffix}"
+    try:
+        src_path.write_bytes(content)
+        rows = parse_attendance_upload(src_path, raw_bytes=content)
+        if not rows:
+            raise HTTPException(status_code=400, detail="No valid attendance rows found in file")
+        uploader = (current_user or {}).get("name") or (current_user or {}).get("email") or "faculty"
+        result = apply_attendance_rows(rows, uploaded_by=str(uploader))
+        result["filename"] = original
+        return result
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Attendance upload failed: %s", exc)
+        raise HTTPException(status_code=500, detail="Attendance upload failed") from exc
+    finally:
+        try:
+            if src_path.exists():
+                src_path.unlink()
+        except OSError:
+            pass
+
+
 class AttendanceCheckIn(BaseModel):
     student_id: str
     student_name: Optional[str] = None
@@ -1578,6 +1657,35 @@ def attendance_check_in(
         "subject": subject,
         "timestamp": stamp,
     }
+
+
+def _build_student_attendance_heatmap(sessions: list, record_map: dict) -> list:
+    """Per-day present / absent / partial for enrolled sessions with a class_date."""
+    by_date: dict[str, list] = {}
+    for session in sessions:
+        day = str(session.get("class_date") or "").strip()
+        if not day:
+            continue
+        by_date.setdefault(day, []).append(session)
+
+    days_out = []
+    for day in sorted(by_date.keys()):
+        day_sessions = by_date[day]
+        present = 0
+        for session in day_sessions:
+            cid = session.get("id")
+            rec = record_map.get(cid) or record_map.get(str(cid))
+            if rec and rec.get("status") in ("Present", "Late"):
+                present += 1
+        total = len(day_sessions)
+        if present >= total:
+            status = "present"
+        elif present == 0:
+            status = "absent"
+        else:
+            status = "partial"
+        days_out.append({"date": day, "status": status, "lectures": total})
+    return days_out
 
 
 @app.get("/api/attendance/student/{student_id}")
@@ -1689,6 +1797,23 @@ def get_student_attendance(
             if r_dict.get("status") in ("Present", "Late"):
                 subject_map[clean_name]["attended"] += 1
 
+        canonical_student_id = str((student or {}).get("id") or student_id)
+        snapshot_ids = set(lookup_ids) | {canonical_student_id}
+        for snap in fetch_subject_snapshots(db, snapshot_ids):
+            subj_raw = snap.get("subject") or "General"
+            clean_name = _subject_bucket(subj_raw) or _clean_subject_name(subj_raw)
+            if not clean_name:
+                continue
+            attended = int(snap.get("classes_attended") or 0)
+            total = int(snap.get("total_classes") or 0)
+            subject_map[clean_name] = {
+                "attended": attended,
+                "total": total,
+                "live_sessions": total,
+                "batch": snap.get("batch_id") or subject_map.get(clean_name, {}).get("batch"),
+                "source": "faculty_upload",
+            }
+
         subjects_out = []
         tot_att = 0
         tot_held = 0
@@ -1705,10 +1830,13 @@ def get_student_attendance(
                 "percentage": pct,
                 "batch": stats.get("batch") or "",
                 "status": "Eligible" if pct >= 75 else ("Warning" if pct >= 50 else "Shortage"),
+                "source": stats.get("source") or "live",
             })
 
         subjects_out.sort(key=lambda x: x["subject"])
         overall_pct = round((tot_att / max(tot_held, 1)) * 100, 1)
+
+        heatmap_days = _build_student_attendance_heatmap(sessions, record_map)
 
         return {
             "student_id": student_id,
@@ -1718,6 +1846,7 @@ def get_student_attendance(
             "total_classes": tot_held,
             "enrollments": enrollments,
             "subjects": subjects_out,
+            "heatmap_days": heatmap_days,
         }
 
 
@@ -2048,6 +2177,16 @@ def faculty_attendance_summary(
     today_enrolled = sum(item["learner_count"] for item in batch_overview) if batch_overview else len(students)
     today_present = sum(item["present_today"] for item in batch_overview)
 
+    density_by_date: dict[str, int] = {}
+    for session in sessions:
+        day = str(session.get("class_date") or "").strip()
+        if day:
+            density_by_date[day] = density_by_date.get(day, 0) + 1
+    lecture_density_days = [
+        {"date": day, "lectures": density_by_date[day]}
+        for day in sorted(density_by_date.keys())
+    ]
+
     return {
         "total_classes_conducted": total_classes,
         "overall_average_percentage": overall_avg,
@@ -2055,6 +2194,7 @@ def faculty_attendance_summary(
         "generated_at": now(),
         "subjects": subjects_out,
         "batch_overview": batch_overview,
+        "lecture_density_days": lecture_density_days,
         "today": {
             "present": today_present,
             "enrolled": today_enrolled,
@@ -2381,6 +2521,117 @@ def post_thread_message(
     return message
 
 
+
+# --- AI & file conversion ---
+
+
+class AiAskPayload(BaseModel):
+    query: str
+    subject: Optional[str] = None
+    context: Optional[str] = None
+
+
+class AiEmailDraftPayload(BaseModel):
+    bullets: str
+    tone: Optional[str] = "professional"
+
+
+@app.post("/api/ai/ask")
+def ai_ask_study(
+    payload: AiAskPayload,
+    current_user: Optional[dict] = Depends(get_optional_current_user),
+):
+    """Grounded study Q&A using lecture notes and assignment context."""
+    query = (payload.query or "").strip()
+    if not query:
+        raise HTTPException(status_code=400, detail="query is required")
+    if len(query) > 4000:
+        raise HTTPException(status_code=400, detail="query is too long")
+
+    context_body, sources = gather_study_context(
+        current_user,
+        subject=payload.subject,
+        extra_context=payload.context,
+    )
+    result = gemini_study_answer(query, context_body, sources)
+    return {
+        "query": query,
+        "answer": result.get("answer"),
+        "sources": result.get("sources") or [],
+        "gemini_configured": bool(result.get("configured")),
+    }
+
+
+@app.post("/api/ai/draft-email")
+def ai_draft_email(
+    payload: AiEmailDraftPayload,
+    current_user: Optional[dict] = Depends(get_optional_current_user),
+):
+    bullets = (payload.bullets or "").strip()
+    if not bullets:
+        raise HTTPException(status_code=400, detail="bullets are required")
+    signer = (current_user or {}).get("name") if current_user else "Openclass User"
+    draft = gemini_email_draft(bullets, signer_name=signer)
+    return {
+        "subject": draft.get("subject"),
+        "body": draft.get("body"),
+        "sign_off": draft.get("sign_off"),
+        "gemini_configured": bool(draft.get("configured")),
+    }
+
+
+@app.post("/api/tools/convert")
+async def tools_convert_file(
+    file: UploadFile = File(...),
+    target_format: str = Form(...),
+    current_user: Optional[dict] = Depends(get_optional_current_user),
+):
+    """Convert .docx ↔ .pdf and return a download."""
+    if not current_user:
+        raise HTTPException(status_code=401, detail="Sign in to use the file converter")
+
+    target = (target_format or "").strip().lower().lstrip(".")
+    original = (file.filename or "upload").strip()
+    suffix = Path(original).suffix.lower()
+    if suffix not in {".docx", ".pdf"}:
+        raise HTTPException(status_code=400, detail="Upload a .docx or .pdf file")
+
+    convert_dir = Path(UPLOAD_DIR) / "conversions"
+    convert_dir.mkdir(parents=True, exist_ok=True)
+
+    import uuid
+
+    token = uuid.uuid4().hex
+    src_path = convert_dir / f"src-{token}{suffix}"
+    try:
+        content = await file.read()
+        if len(content) > 25 * 1024 * 1024:
+            raise HTTPException(status_code=400, detail="File too large (max 25MB)")
+        src_path.write_bytes(content)
+
+        out_path, out_name = convert_document(src_path, target, convert_dir)
+        return FileResponse(
+            out_path,
+            filename=out_name,
+            media_type=(
+                "application/pdf"
+                if target == "pdf"
+                else "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            ),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("File conversion failed: %s", exc)
+        raise HTTPException(status_code=500, detail="Conversion failed") from exc
+    finally:
+        try:
+            if src_path.exists():
+                src_path.unlink()
+        except OSError:
+            pass
+
+
 @app.get("/api/health")
 def health():
     return {
@@ -2388,6 +2639,7 @@ def health():
         "mode": APP_MODE,
         "google_meet_creation_allowed": MEET_CREATION_ALLOWED,
         "email_delivery_enabled": EMAIL_DELIVERY_ENABLED,
+        "gemini_configured": get_genai_client() is not None,
         "timestamp": now(),
     }
 

@@ -391,3 +391,89 @@
   font-weight: 700;
   color: #61d7da;
 }
+
+/* Assignment submit modal — convert beside Cancel */
+.modal-actions--submit {
+  display: flex;
+  align-items: stretch;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.modal-actions--submit .modal-actions-start {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.modal-actions--submit .modal-submit-primary {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.modal-actions--submit #btn-cancel-modal {
+  flex: 0 0 auto;
+}
+
+.submit-convert-btn {
+  flex: 1 1 12rem;
+  min-width: 0;
+  text-align: center;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.25;
+  padding: 10px 12px;
+  opacity: 0.55;
+}
+
+.submit-convert-btn--ready {
+  opacity: 1;
+  border-color: rgba(124, 58, 237, 0.45);
+  background: rgba(124, 58, 237, 0.12);
+  color: var(--oc-text, #0f172a);
+}
+
+.submit-convert-btn--ready:hover:not(:disabled) {
+  background: rgba(124, 58, 237, 0.2);
+  border-color: #7c3aed;
+}
+
+@media (max-width: 520px) {
+  .modal-actions--submit {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .modal-actions--submit .modal-actions-start {
+    flex-direction: column;
+  }
+
+  .modal-actions--submit .modal-submit-primary {
+    width: 100%;
+  }
+}
+
+/* Compact floating Ask + logo (no icon) */
+.primary-btn.oc-ai-fab {
+  padding: 3px 9px 3px 5px !important;
+  min-height: unset !important;
+  gap: 0;
+}
+
+.oc-ai-fab .oc-ask-logo--fab {
+  width: 38px;
+  height: 38px;
+  flex-shrink: 0;
+}
+
+.oc-ai-fab .oc-ask-brand--fab {
+  gap: 6px;
+}
+
+.oc-ai-fab .oc-ask-label {
+  font-size: 13px;
+  padding-right: 2px;
+}

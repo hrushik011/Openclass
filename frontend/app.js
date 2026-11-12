@@ -47,8 +47,50 @@
     pendingMasterFile: null,
     enrollments: [],
     todayClasses: [],
-    assignmentFilter: "all"
+    assignmentFilter: "all",
+    aiWidgetOpen: false,
+    aiMode: "study",
+    aiMessages: [],
+    aiLoading: false,
+    aiEmailDraft: null,
+    convertTarget: "pdf",
+    convertFileName: "",
+    convertBusy: false,
+    hubConvertFile: null,
+    facultyAttendanceFile: null,
+    facultyAttendanceUploadBusy: false,
+    submitPendingFile: null,
+    workspaceSettings: (() => {
+      try {
+        const raw = localStorage.getItem("openclass_workspace_settings");
+        return raw
+          ? { ...{ displayName: "", notifyClassStart: true, notifyAssignments: true, googleCalendar: false, microsoft365: false }, ...JSON.parse(raw) }
+          : { displayName: "", notifyClassStart: true, notifyAssignments: true, googleCalendar: false, microsoft365: false };
+      } catch (e) {
+        return { displayName: "", notifyClassStart: true, notifyAssignments: true, googleCalendar: false, microsoft365: false };
+      }
+    })(),
   };
+
+  function persistWorkspaceSettings() {
+    try {
+      localStorage.setItem("openclass_workspace_settings", JSON.stringify(state.workspaceSettings));
+    } catch (e) {}
+  }
+
+  function workspaceDisplayName() {
+    return (
+      (state.workspaceSettings && state.workspaceSettings.displayName) ||
+      (state.user && state.user.name) ||
+      "Member"
+    );
+  }
+
+  function authHeadersOnly() {
+    const h = {};
+    if (state.token) h.Authorization = `Bearer ${state.token}`;
+    return h;
+  }
 
   function applyTheme() {
     const theme = state.theme === "dark" ? "dark" : "light";
@@ -58,14 +100,345 @@
   }
   applyTheme();
 
-  function renderOpenclassLogo(size = 40) {
+  const OPENCLASS_LOGO_URL = "/assets/Openclass_LOGO.png";
+
+  function askOpenclassBrandHtml(opts = {}) {
+    const fab = !!opts.fab;
+    const logoSize = fab ? 36 : (opts.size || 20);
+    const brandClass = fab ? "oc-ask-brand oc-ask-brand--fab" : "oc-ask-brand";
+    const logoClass = fab ? "oc-ask-logo oc-ask-logo--fab" : "oc-ask-logo";
+    return `<span class="${brandClass}"><img src="${OPENCLASS_LOGO_URL}" alt="" class="${logoClass}" width="${logoSize}" height="${logoSize}" decoding="async" /><span class="oc-ask-label">Ask</span></span>`;
+  }
+
+  function renderFacultyAttendanceUploadPanel(compact) {
+    const fname = state.facultyAttendanceFile
+      ? state.facultyAttendanceFile.name
+      : "No file selected";
+    return `
+      <section class="panel faculty-attendance-upload" style="margin-bottom: 18px; padding: ${compact ? "14px 16px" : "18px 20px"};">
+        <div class="panel-head" style="padding: 0 0 12px; margin: 0;">
+          <div class="panel-title">${getIcon("upload", 15)} Class attendance upload</div>
+          <span class="panel-meta">CSV / Excel</span>
+        </div>
+        <p style="font-size: 11px; color: var(--oc-muted); margin: 0 0 12px;">
+          Columns: student ID, subject code, classes attended, total classes held. Updates student dashboard percentages instantly.
+        </p>
+        <div class="hub-converter-row">
+          <div class="upload-zone hub-convert-drop" id="faculty-attendance-drop">
+            <span style="font-size: 12px; font-weight: 700;">Drop .csv or .xlsx here</span>
+            <span class="tt-file-name" id="faculty-attendance-filename">${fname}</span>
+            <input type="file" id="faculty-attendance-input" accept=".csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" />
+          </div>
+          <div class="hub-converter-actions">
+            <button type="button" class="primary-btn" id="btn-faculty-attendance-upload" ${state.facultyAttendanceUploadBusy ? "disabled" : ""}>
+              ${state.facultyAttendanceUploadBusy ? "Uploading…" : `${getIcon("upload", 13)} Publish attendance`}
+            </button>
+          </div>
+        </div>
+      </section>
+    `;
+  }
+
+  function renderAtmosphereBackdrop() {
+    return `<div class="oc-atmosphere" aria-hidden="true"></div>`;
+  }
+
+  function renderOpenclassLogo(height = 40, extraClass = "") {
+    const cls = ["oc-logo-mark", "oc-logo-png", extraClass].filter(Boolean).join(" ");
     return `
       <img
-        class="oc-logo-mark"
-        src="/assets/Openclass%20logo_3.png"
+        class="${cls}"
+        src="${OPENCLASS_LOGO_URL}"
         alt="Openclass"
-        style="height: ${size}px; width: auto;"
+        height="${height}"
+        loading="eager"
+        decoding="async"
       />
+    `;
+  }
+
+  const HEATMAP_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const HEATMAP_DOW_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+  function heatmapMondayOnOrBefore(date) {
+    const d = new Date(date);
+    d.setHours(12, 0, 0, 0);
+    const dow = d.getDay();
+    const shift = dow === 0 ? -6 : 1 - dow;
+    d.setDate(d.getDate() + shift);
+    return d;
+  }
+
+  /** Jul–Jun academic slice: anchor from July 1 through today (e.g. Jul–Nov). */
+  function heatmapSemesterStart(ref) {
+    const y = ref.getFullYear();
+    const month = ref.getMonth();
+    if (month >= 6) {
+      return new Date(y, 6, 1, 12, 0, 0, 0);
+    }
+    return new Date(y - 1, 6, 1, 12, 0, 0, 0);
+  }
+
+  function heatmapMonthLabelsForWeeks(weekColumns) {
+    let lastMonthKey = null;
+    return weekColumns.map((week) => {
+      for (const cell of week) {
+        if (!cell || !cell.date || cell.status === "future") continue;
+        const parts = cell.date.split("-").map(Number);
+        const d = parts[2];
+        const m = parts[1];
+        const y = parts[0];
+        if (d !== 1) continue;
+        const key = `${y}-${m}`;
+        if (lastMonthKey === key) return "";
+        lastMonthKey = key;
+        return HEATMAP_MONTHS[m - 1] || "";
+      }
+      const monday = week[0];
+      if (!monday || !monday.date || monday.status === "future") return "";
+      const parts = monday.date.split("-").map(Number);
+      const key = `${parts[0]}-${parts[1]}`;
+      if (lastMonthKey === key) return "";
+      lastMonthKey = key;
+      return HEATMAP_MONTHS[parts[1] - 1] || "";
+    });
+  }
+
+  function heatmapCellsToWeekColumns(cells) {
+    const weeks = [];
+    for (let i = 0; i < cells.length; i += 7) {
+      const slice = cells.slice(i, i + 7);
+      while (slice.length < 7) {
+        slice.push({ date: "", status: "future", lectures: 0 });
+      }
+      weeks.push(slice);
+    }
+    return weeks;
+  }
+
+  function heatmapCalendarCells(dayEntries) {
+    const map = new Map((dayEntries || []).map((row) => [row.date, row]));
+    const today = new Date();
+    today.setHours(12, 0, 0, 0);
+
+    const semesterStart = heatmapSemesterStart(today);
+    const gridStart = heatmapMondayOnOrBefore(semesterStart);
+    const cells = [];
+
+    for (let cursor = new Date(gridStart); cursor <= today; cursor.setDate(cursor.getDate() + 1)) {
+      const key = formatLocalYmd(cursor);
+      const entry = map.get(key);
+      cells.push({
+        date: key,
+        status: entry ? entry.status : "no_class",
+        lectures: entry && entry.lectures != null ? entry.lectures : 0,
+      });
+    }
+
+    const endDow = today.getDay();
+    const daysAfterToday = endDow === 0 ? 0 : 7 - endDow;
+    for (let i = 1; i <= daysAfterToday; i++) {
+      const future = new Date(today);
+      future.setDate(future.getDate() + i);
+      cells.push({
+        date: formatLocalYmd(future),
+        status: "future",
+        lectures: 0,
+      });
+    }
+
+    return cells;
+  }
+
+  function studentActivityDayEntries() {
+    const base = (state.studentAttendance && state.studentAttendance.heatmap_days) || [];
+    const map = new Map(base.map((row) => [row.date, { ...row }]));
+    (state.assignments || []).forEach((assignment) => {
+      if (!assignment.has_submitted) return;
+      const raw =
+        (assignment.submission_details && assignment.submission_details.submitted_at) ||
+        assignment.submitted_at ||
+        assignment.submittedAt;
+      if (!raw) return;
+      const day = String(raw).slice(0, 10);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return;
+      const existing = map.get(day);
+      if (existing) {
+        if (existing.status === "no_class") {
+          map.set(day, { date: day, status: "study", lectures: 0 });
+        } else if (existing.status === "present") {
+          map.set(day, { ...existing, status: "present_study" });
+        }
+      } else {
+        map.set(day, { date: day, status: "study", lectures: 0 });
+      }
+    });
+    return Array.from(map.values()).sort((a, b) => a.date.localeCompare(b.date));
+  }
+
+  function formatLocalYmd(date) {
+    const y = date.getFullYear();
+    const m = String(date.getMonth() + 1).padStart(2, "0");
+    const d = String(date.getDate()).padStart(2, "0");
+    return `${y}-${m}-${d}`;
+  }
+
+  function facultyLectureDensityDays(facultyAttendance, classes) {
+    const fromApi = facultyAttendance && facultyAttendance.lecture_density_days;
+    if (Array.isArray(fromApi) && fromApi.length) {
+      return fromApi.map((row) => ({
+        date: row.date,
+        lectures: Number(row.lectures) || 0,
+        status:
+          Number(row.lectures) >= 3 ? "dense" : Number(row.lectures) >= 1 ? "lecture" : "no_class",
+      }));
+    }
+    const density = {};
+    (classes || []).forEach((session) => {
+      const day = String(session.class_date || "").trim();
+      if (!day) return;
+      density[day] = (density[day] || 0) + 1;
+    });
+    return Object.keys(density)
+      .sort()
+      .map((date) => {
+        const lectures = density[date];
+        return {
+          date,
+          lectures,
+          status: lectures >= 3 ? "dense" : lectures >= 1 ? "lecture" : "no_class",
+        };
+      });
+  }
+
+  function renderDashboardMetrics(items) {
+    return `
+      <div class="dashboard-metrics" role="list">
+        ${(items || [])
+          .map(
+            (m) => `
+          <div class="metric-card panel" role="listitem">
+            <div class="metric-icon" aria-hidden="true">${getIcon(m.icon, 17)}</div>
+            <div class="metric-copy">
+              <span class="metric-label">${m.label}</span>
+              <strong class="metric-value">${m.value}</strong>
+              ${m.hint ? '<span class="metric-hint">' + m.hint + '</span>' : ''}
+            </div>
+          </div>
+        `
+          )
+          .join("")}
+      </div>
+    `;
+  }
+
+  function renderSemesterHeatmapPanel({
+    title,
+    subtitle,
+    dayEntries,
+    mode = "student",
+    variant = "default",
+  }) {
+    const cells = heatmapCalendarCells(dayEntries);
+    const weekColumns = heatmapCellsToWeekColumns(cells);
+    const monthLabels = heatmapMonthLabelsForWeeks(weekColumns);
+    const legend =
+      mode === "faculty"
+        ? [
+            { status: "no_class", label: "No lectures" },
+            { status: "lecture", label: "1–2 lectures" },
+            { status: "dense", label: "3+ lectures" },
+          ]
+        : variant === "activity"
+          ? [
+              { status: "no_class", label: "No activity" },
+              { status: "study", label: "Study / submit" },
+              { status: "present", label: "Present" },
+              { status: "present_study", label: "Class + study" },
+              { status: "partial", label: "Partial" },
+              { status: "absent", label: "Absent" },
+            ]
+          : [
+              { status: "no_class", label: "No class" },
+              { status: "present", label: "Present" },
+              { status: "partial", label: "Partial" },
+              { status: "absent", label: "Absent" },
+            ];
+    const panelClass = [
+      "panel",
+      "attendance-heatmap-panel",
+      "attendance-heatmap-compact",
+      variant === "activity" ? "activity-contribution-panel" : "",
+    ]
+      .filter(Boolean)
+      .join(" ");
+    return `
+      <section class="${panelClass}">
+        <div class="panel-head heatmap-panel-head">
+          <div class="panel-title">${getIcon("calendar", 15)} ${title}</div>
+          ${subtitle ? `<span class="panel-meta">${subtitle}</span>` : ""}
+        </div>
+        <div class="heatmap-body heatmap-body-compact">
+          <div class="heatmap-contribution-layout heatmap-wispr">
+            <div class="heatmap-left-rail">
+              <div class="heatmap-month-corner" aria-hidden="true"></div>
+              <div class="heatmap-y-labels heatmap-y-labels-grid" aria-hidden="true">
+                ${HEATMAP_DOW_LABELS.map((label) => `<span class="heatmap-dow-label">${label}</span>`).join("")}
+              </div>
+            </div>
+            <div class="heatmap-scroll heatmap-scroll-horizontal" tabindex="0">
+              <div class="heatmap-scroll-track">
+                <div class="heatmap-month-row" aria-hidden="true">
+                  ${monthLabels
+                    .map(
+                      (label) => `
+                    <span class="heatmap-month-slot">
+                      ${label ? `<span class="heatmap-month-text">${label}</span>` : ""}
+                    </span>
+                  `
+                    )
+                    .join("")}
+                </div>
+                <div class="heatmap-grid-github activity-contribution-grid" role="img" aria-label="${title}">
+                  ${weekColumns
+                    .map(
+                      (week) => `
+                    <div class="heatmap-week-col">
+                      ${week
+                        .map((cell) => {
+                          const isFuture = cell.status === "future";
+                          const tip = isFuture
+                            ? ""
+                            : `${cell.date}: ${cell.status.replace(/_/g, " ")}${
+                                cell.lectures ? ` · ${cell.lectures} lecture(s)` : ""
+                              }`;
+                          return `<span class="heatmap-cell heatmap-${cell.status}${isFuture ? " heatmap-future" : ""}"${
+                            tip ? ` title="${tip}"` : ""
+                          }${cell.date ? ` data-date="${cell.date}"` : ""}></span>`;
+                        })
+                        .join("")}
+                    </div>
+                  `
+                    )
+                    .join("")}
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="heatmap-legend heatmap-legend-compact">
+            ${legend
+              .map(
+                (item) => `
+              <span class="heatmap-legend-item">
+                <span class="heatmap-cell heatmap-${item.status} heatmap-legend-swatch"></span>
+                ${item.label}
+              </span>
+            `
+              )
+              .join("")}
+          </div>
+        </div>
+      </section>
     `;
   }
 
@@ -615,6 +988,77 @@
       }
     },
 
+    async aiAsk(query, subject) {
+      state.aiLoading = true;
+      render();
+      try {
+        const res = await fetch("/api/ai/ask", {
+          method: "POST",
+          headers: api.headers(),
+          body: JSON.stringify({
+            query,
+            subject: subject || null,
+            context: state.filterSearch || null,
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || "AI request failed");
+        return data;
+      } finally {
+        state.aiLoading = false;
+      }
+    },
+
+    async aiDraftEmail(bullets) {
+      state.aiLoading = true;
+      render();
+      try {
+        const res = await fetch("/api/ai/draft-email", {
+          method: "POST",
+          headers: api.headers(),
+          body: JSON.stringify({ bullets, tone: "professional" }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || "Could not draft email");
+        return data;
+      } finally {
+        state.aiLoading = false;
+      }
+    },
+
+    async uploadFacultyAttendance(file) {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await fetch("/api/faculty/upload-attendance", {
+        method: "POST",
+        headers: authHeadersOnly(),
+        body: fd,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.detail || "Attendance upload failed");
+      return data;
+    },
+
+    async convertDocument(file, targetFormat) {
+      const fd = new FormData();
+      fd.append("file", file);
+      fd.append("target_format", targetFormat);
+      const res = await fetch("/api/tools/convert", {
+        method: "POST",
+        headers: authHeadersOnly(),
+        body: fd,
+      });
+      if (!res.ok) {
+        let detail = "Conversion failed";
+        try {
+          const data = await res.json();
+          detail = data.detail || detail;
+        } catch (e) {}
+        throw new Error(detail);
+      }
+      return res.blob();
+    },
+
     async createAssignment(payload, file) {
       state.loading = true;
       render();
@@ -686,12 +1130,33 @@
       }
     },
 
-    async submitAssignment(assignmentId, file) {
+    async submitAssignment(assignmentId, file, options = {}) {
       state.loading = true;
       render();
       try {
+        let uploadFile = file;
+        const name = (file && file.name) || "";
+        const lower = name.toLowerCase();
+        let convertTarget = options.convertTarget || null;
+        if (options.convertAndSubmit) {
+          if (lower.endsWith(".docx")) convertTarget = "pdf";
+          else if (lower.endsWith(".pdf")) convertTarget = "docx";
+        }
+        if (convertTarget === "pdf" && lower.endsWith(".docx")) {
+          const blob = await api.convertDocument(file, "pdf");
+          const base = name.replace(/\.[^.]+$/, "");
+          uploadFile = new File([blob], `${base}.pdf`, { type: "application/pdf" });
+        } else if (convertTarget === "docx" && lower.endsWith(".pdf")) {
+          const blob = await api.convertDocument(file, "docx");
+          const base = name.replace(/\.[^.]+$/, "");
+          uploadFile = new File(
+            [blob],
+            `${base}.docx`,
+            { type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" }
+          );
+        }
         const formData = new FormData();
-        formData.append("file", file);
+        formData.append("file", uploadFile);
         formData.append("student_id", String(state.user.id));
 
         const res = await fetch(`/api/assignments/${assignmentId}/submit`, {
@@ -703,7 +1168,7 @@
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.detail || "Submission upload failed");
-        showToast(`Submission uploaded successfully: ${file.name}`);
+        showToast(`Submission uploaded successfully: ${uploadFile.name}`);
         state.activeModal = null;
         await api.loadDashboardData();
       } catch (e) {
@@ -1427,6 +1892,7 @@
     const isStudent = state.loginTab === "STUDENT";
     return `
       <div class="login-screen">
+        ${renderAtmosphereBackdrop()}
         <div class="login-bg-rings" aria-hidden="true">
           <span class="login-ring login-ring-a"></span>
           <span class="login-ring login-ring-b"></span>
@@ -1434,7 +1900,7 @@
         </div>
         <div class="login-card">
           <div class="login-brand">
-            ${renderOpenclassLogo(36)}
+            ${renderOpenclassLogo(52, "oc-logo-login")}
             <div>
               <div class="login-title">Openclass</div>
               <div style="font-size: 8px; font-family: var(--app-font-mono); color: #a78bfa; letter-spacing: 0.12em;">IMDR ACADEMIC CLOUD</div>
@@ -1622,8 +2088,13 @@
 
     return `
       <div class="shell">
+        ${renderAtmosphereBackdrop()}
         <!-- Sidebar -->
         <aside class="sidebar">
+          <div class="sidebar-logo-wrap">
+            ${renderOpenclassLogo(40, "oc-logo-sidebar")}
+            <span class="sidebar-brand-name">Openclass</span>
+          </div>
           <div class="nav-label">Workspace</div>
           <nav class="nav-list" aria-label="workspace navigation">
             ${navItems
@@ -1672,7 +2143,7 @@
           <!-- Topbar -->
           <header class="topbar reducto-topbar">
             <div class="reducto-brand">
-              ${renderOpenclassLogo(40)}
+              ${renderOpenclassLogo(40, "oc-logo-topbar")}
               <span class="reducto-brand-name">Openclass</span>
               ${!isFaculty ? `<span class="topbar-greeting">${personalizedGreeting(user)}</span>` : ""}
             </div>
@@ -1709,7 +2180,7 @@
         </main>
 
         <!-- Floating Action Button -->
-        <button class="primary-btn" id="btn-floating-action" style="position: fixed; right: 28px; bottom: 25px; z-index: 25;">
+        <button class="primary-btn" id="btn-floating-action" style="position: fixed; right: 28px; bottom: 96px; z-index: 24;">
           ${isActualFaculty ? getIcon("video", 14) : getIcon("plus", 14)}
           ${isActualFaculty ? "Schedule sudden class" : "Start new thread"}
         </button>
@@ -1720,7 +2191,159 @@
 
       <!-- Success / Alert Toast -->
       ${renderToast()}
+      ${renderFloatingAiWidget()}
     `;
+  }
+
+  function renderFloatingAiWidget() {
+    const open = state.aiWidgetOpen;
+    const mode = state.aiMode || "study";
+    const messages = state.aiMessages || [];
+    return `
+      <div class="oc-ai-widget${open ? " open" : ""}" id="oc-ai-widget">
+        ${open ? `
+          <motionless class="oc-ai-panel panel">
+            <div class="oc-ai-head">
+              <motionless class="oc-ai-title-wrap">
+                ${askOpenclassBrandHtml({ size: 20 })}
+              </motionless>
+              <div class="oc-ai-mode-tabs">
+                <button type="button" class="oc-ai-mode${mode === "study" ? " active" : ""}" data-ai-mode="study">Study</button>
+                <button type="button" class="oc-ai-mode${mode === "email" ? " active" : ""}" data-ai-mode="email">Email</button>
+              </div>
+              <button type="button" class="icon-btn oc-ai-close" id="btn-ai-close" aria-label="Close">${getIcon("close", 14)}</button>
+            </div>
+            <div class="oc-ai-messages" id="oc-ai-messages">
+              ${messages.length
+                ? messages.map((m) => `
+                  <div class="oc-ai-msg oc-ai-msg-${m.role}">
+                    <div class="oc-ai-msg-body">${m.html || m.text}</div>
+                    ${m.sources && m.sources.length ? `
+                      <div class="oc-ai-sources">
+                        ${m.sources.slice(0, 4).map((s) => `<span class="status-pill">${s.type === "assignment" ? "Assignment" : "Note"}: ${s.title}</span>`).join("")}
+                      </div>
+                    ` : ""}
+                  </div>
+                `).join("")
+                : `<p class="oc-ai-empty">${mode === "email" ? "Paste bullet points for a professional email draft." : "Ask about deadlines, lecture notes, or concepts from your Knowledge Hub."}</p>`}
+            </div>
+            ${mode === "email" && state.aiEmailDraft ? `
+              <div class="oc-ai-draft panel" style="margin: 0 12px 10px; padding: 12px; font-size: 11px;">
+                <div><strong>Subject:</strong> ${escapeHtml(state.aiEmailDraft.subject || "")}</div>
+                <pre style="white-space: pre-wrap; margin: 8px 0 0; font-family: inherit; color: var(--oc-text);">${escapeHtml(state.aiEmailDraft.body || "")}</pre>
+              </div>
+            ` : ""}
+            <form class="oc-ai-form" id="form-ai-chat">
+              <textarea
+                id="ai-input"
+                class="field-input"
+                rows="${mode === "email" ? 3 : 2}"
+                placeholder="${mode === "email" ? "• Ask placement cell to reschedule interview\\n• Mention batch PGDM-A" : "Ask a study question…"}"
+                required
+              ></textarea>
+              <button type="submit" class="primary-btn" ${state.aiLoading ? "disabled" : ""}>
+                ${state.aiLoading ? "Thinking…" : (mode === "email" ? "Draft email" : "Ask")}
+              </button>
+            </form>
+          </motionless>
+        ` : ""}
+        <button type="button" class="primary-btn oc-ai-fab" id="btn-ai-widget-toggle" aria-expanded="${open}" aria-label="Ask Openclass">
+          ${askOpenclassBrandHtml({ fab: true })}
+        </button>
+      </div>
+    `.replace(/<motionless/g, "<div").replace(/<\/motionless>/g, "</div>");
+  }
+
+  function escapeHtml(text) {
+    return String(text || "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+
+  function formatAiAnswer(text) {
+    return escapeHtml(text).replace(/\n/g, "<br>");
+  }
+
+  function renderWorkspaceSettings() {
+    const user = state.user || {};
+    const ws = state.workspaceSettings || {};
+    const role = String(user.role || "STUDENT").toUpperCase();
+    const displayName = ws.displayName || user.name || "";
+    const studentId = user.roll_no || user.roster_id || user.id || "—";
+    const email = user.email || "—";
+
+    return `
+      <div class="workspace-settings-view">
+        <div class="hero-row">
+          <div>
+            <div class="eyebrow">Workspace</div>
+            <h1 class="hero-title">Settings.</h1>
+            <p class="hero-copy">Profile, notifications, calendar connectors, and appearance for your Openclass workspace.</p>
+          </div>
+        </div>
+
+        <div class="settings-grid">
+          <section class="panel settings-section">
+            <motionless class="panel-head" style="padding: 14px 18px;">
+              <motionless class="panel-title">Profile & identity</motionless>
+            </motionless>
+            <div class="settings-body">
+              <label class="field-label" for="settings-display-name">Display name</label>
+              <input id="settings-display-name" class="field-input" value="${escapeHtml(displayName)}" placeholder="How your name appears in Openclass" />
+              <div class="settings-meta-grid">
+                <div><span class="metric-label">Role</span><strong>${role}</strong></div>
+                <div><span class="metric-label">${role === "FACULTY" ? "Faculty ID" : "Student ID"}</span><strong>${escapeHtml(String(studentId))}</strong></div>
+                <div style="grid-column: 1 / -1;"><span class="metric-label">Institutional email</span><strong>${escapeHtml(email)}</strong></div>
+              </div>
+            </div>
+          </section>
+
+          <section class="panel settings-section">
+            <motionless class="panel-head" style="padding: 14px 18px;"><motionless class="panel-title">Notifications</motionless></motionless>
+            <div class="settings-body settings-toggles">
+              <label class="settings-toggle-row">
+                <span>Lecture start reminders (~5 min before class)</span>
+                <input type="checkbox" id="toggle-notify-class" ${ws.notifyClassStart ? "checked" : ""} />
+              </label>
+              <label class="settings-toggle-row">
+                <span>Assignment deadline reminders</span>
+                <input type="checkbox" id="toggle-notify-assignments" ${ws.notifyAssignments ? "checked" : ""} />
+              </label>
+            </div>
+          </section>
+
+          <section class="panel settings-section">
+            <motionless class="panel-head" style="padding: 14px 18px;"><motionless class="panel-title">Calendar & apps</motionless></motionless>
+            <div class="settings-body settings-toggles">
+              <label class="settings-toggle-row">
+                <span>Google Calendar sync (connector)</span>
+                <input type="checkbox" id="toggle-google-cal" ${ws.googleCalendar ? "checked" : ""} />
+              </label>
+              <label class="settings-toggle-row">
+                <span>Microsoft 365 / Outlook</span>
+                <input type="checkbox" id="toggle-ms-365" ${ws.microsoft365 ? "checked" : ""} />
+              </label>
+              <p style="font-size: 11px; color: var(--oc-muted); margin: 8px 0 0;">Connectors are saved locally; institutional OAuth can be enabled by IT.</p>
+            </div>
+          </section>
+
+          <section class="panel settings-section">
+            <motionless class="panel-head" style="padding: 14px 18px;"><motionless class="panel-title">Theme</motionless></motionless>
+            <div class="settings-body">
+              <p style="font-size: 12px; color: var(--oc-muted); margin: 0 0 12px;">Warm cream light canvas (#FAF8F5) or charcoal dark (#121212).</p>
+              <div class="settings-theme-pills">
+                <button type="button" class="notes-subject-pill${state.theme === "light" ? " active" : ""}" id="btn-settings-theme-light">Cream light</button>
+                <button type="button" class="notes-subject-pill${state.theme === "dark" ? " active" : ""}" id="btn-settings-theme-dark">Charcoal dark</button>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <button type="button" class="primary-btn" id="btn-save-workspace-settings" style="margin-top: 16px;">Save workspace settings</button>
+      </div>
+    `.replace(/<motionless/g, "<div").replace(/<\/motionless>/g, "</div>");
   }
 
   function renderTabContent() {
@@ -1751,6 +2374,8 @@
       case "knowledge-hub":
       case "Knowledge-Hub":
         return renderKnowledgeHub();
+      case "Workspace Settings":
+        return renderWorkspaceSettings();
       default:
         return isActualFaculty && state.role === "faculty"
           ? renderFacultyDashboard()
@@ -1781,12 +2406,49 @@
             <p class="hero-copy">Manage rosters, real-time Google Meet spaces with strict host controls, assignment deadlines, and batch notifications.</p>
           </div>
           <div style="display: flex; flex-direction: column; align-items: flex-end; gap: 8px;">
-            ${renderFacultyClassesConductedPill()}
             <div class="date-note">
               Coordinator mode <b>active</b>
             </div>
           </div>
         </div>
+
+        ${renderDashboardMetrics([
+          {
+            icon: "calendar",
+            label: "Classes conducted",
+            value: String(
+              (state.facultyAttendance && state.facultyAttendance.total_classes_conducted != null)
+                ? state.facultyAttendance.total_classes_conducted
+                : state.classes.length
+            ),
+            hint: state.facultyAttendance && state.facultyAttendance.overall_average_percentage != null
+              ? `Avg attendance ${state.facultyAttendance.overall_average_percentage}%`
+              : "Semester total",
+          },
+          {
+            icon: "assignment",
+            label: "Active assignments",
+            value: String((state.assignments || []).length),
+            hint: "Open portals",
+          },
+          {
+            icon: "upload",
+            label: "Submissions received",
+            value: String(
+              (state.assignments || []).reduce((sum, a) => sum + Number(a.submission_count || 0), 0)
+            ),
+            hint: "Across all assignments",
+          },
+        ])}
+
+        ${renderSemesterHeatmapPanel({
+          title: "Semester Lecture Density",
+          subtitle: "Present / scheduled lecture days",
+          mode: "faculty",
+          dayEntries: facultyLectureDensityDays(state.facultyAttendance, state.classes),
+        })}
+
+        ${renderFacultyAttendanceUploadPanel(true)}
 
         <div class="faculty-grid">
           <!-- Timetable & Ingestion Card -->
@@ -1975,45 +2637,6 @@
     return { conducted, avg, subjectCount: (data && data.subject_count) || 0 };
   }
 
-  function renderFacultyClassesConductedPill() {
-    const { conducted, avg } = facultyAttendanceTotals();
-    const colors = avg == null
-      ? { fill: "#7C3AED", track: "rgba(124,58,237,0.12)", text: "var(--oc-text)" }
-      : attendanceBarColors(avg);
-    return `
-      <div id="faculty-classes-conducted-pill" style="display: inline-flex; align-items: center; gap: 8px; padding: 7px 12px 7px 8px; border-radius: 999px; background: ${colors.track}; border: 1px solid ${colors.fill}55; box-shadow: 0 0 0 3px ${colors.track};">
-        <span style="width: 22px; height: 22px; border-radius: 50%; background: ${colors.fill}22; color: ${colors.text}; display: inline-flex; align-items: center; justify-content: center;">
-          ${getIcon("calendar", 12)}
-        </span>
-        <span style="font-size: 11px; font-weight: 650; color: var(--oc-text); letter-spacing: 0.01em; white-space: nowrap;">
-          Total Classes Conducted: <strong style="color: ${colors.text};">${conducted}</strong>
-          ${avg != null ? `<span style="color: var(--oc-muted); font-weight: 600;"> · Avg ${avg}%</span>` : ""}
-        </span>
-      </div>
-    `;
-  }
-
-  function renderOverallAttendancePill() {
-    const data = state.studentAttendance;
-    const pct = data && data.overall_percentage != null ? Number(data.overall_percentage) : null;
-    const colors = pct == null
-      ? { fill: "#7C3AED", track: "rgba(124,58,237,0.12)", text: "#7C3AED", label: "Loading" }
-      : attendanceBarColors(pct);
-    const label = colors.label;
-    const pctText = pct == null ? "—" : `${pct}%`;
-    return `
-      <div class="attendance-status-strip" id="overall-attendance-strip">
-        ${getIcon("attendance", 13)}
-        <span>Overall attendance</span>
-        <strong style="color: ${colors.text};">${pctText}</strong>
-        <span style="color: ${colors.text}; font-weight: 700; font-size: 11px;">${label}</span>
-        <div class="mini-track" style="background: ${colors.track};">
-          <div style="height: 100%; width: ${pct == null ? 0 : Math.min(Math.max(pct, 0), 100)}%; background: ${colors.fill};"></div>
-        </div>
-      </div>
-    `;
-  }
-
   function renderStudentAttendanceCard() {
     const data = state.studentAttendance;
     const subjects = (data && data.subjects) || [];
@@ -2081,6 +2704,12 @@
             <p class="hero-copy">Live subject-wise attendance for papers assigned to you. Green is 75% or higher, yellow is 50–74%, red is below 50%.</p>
           </div>
         </div>
+        ${renderSemesterHeatmapPanel({
+          title: "Semester Attendance Heatmap",
+          subtitle: "Day-by-day presence across enrolled lectures",
+          mode: "student",
+          dayEntries: (state.studentAttendance && state.studentAttendance.heatmap_days) || [],
+        })}
         ${renderStudentAttendanceCard()}
       </div>
     `;
@@ -2102,10 +2731,18 @@
             <p class="hero-copy">Subject-wise lecture volume and average student attendance for academic review and higher-management reporting.</p>
           </div>
           <div style="display: flex; flex-direction: column; align-items: flex-end; gap: 8px;">
-            ${renderFacultyClassesConductedPill()}
             <div class="date-note">Generated <b>${generated}</b></div>
           </div>
         </div>
+
+        ${renderSemesterHeatmapPanel({
+          title: "Semester Lecture Density",
+          subtitle: "Scheduled lecture days across the term",
+          mode: "faculty",
+          dayEntries: facultyLectureDensityDays(data, state.classes),
+        })}
+
+        ${renderFacultyAttendanceUploadPanel(false)}
 
         <div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-bottom: 18px;">
           <div class="panel" style="padding: 16px 18px;">
@@ -2377,7 +3014,39 @@
           </div>
         </div>
 
-        ${renderOverallAttendancePill()}
+        ${renderDashboardMetrics([
+          {
+            icon: "attendance",
+            label: "Attendance",
+            value:
+              state.studentAttendance && state.studentAttendance.overall_percentage != null
+                ? `${state.studentAttendance.overall_percentage}%`
+                : "—",
+            hint: state.studentAttendance
+              ? `${state.studentAttendance.total_attended || 0}/${state.studentAttendance.total_classes || 0} classes`
+              : "Syncing",
+          },
+          {
+            icon: "assignment",
+            label: "Pending assignments",
+            value: String(pendingAssignments.length),
+            hint: pendingAssignments.length === 1 ? "Action required" : "Action items",
+          },
+          {
+            icon: "upload",
+            label: "Submissions",
+            value: String(allAssignments.filter((a) => a.has_submitted).length),
+            hint: `of ${allAssignments.length} active`,
+          },
+        ])}
+
+        ${renderSemesterHeatmapPanel({
+          title: "Activity Contribution",
+          subtitle: "Horizontal study & attendance consistency",
+          mode: "student",
+          variant: "activity",
+          dayEntries: studentActivityDayEntries(),
+        })}
 
         <div class="dashboard-grid">
           <!-- Up Next Class Card (with Strict Host Google Meet Integration) -->
@@ -2557,6 +3226,31 @@
               <div class="hub-results-count" style="font-size: 11px; color: var(--oc-muted); font-family: var(--app-font-mono); white-space: nowrap;">
                 Showing <strong>${filtered.length}</strong> of <strong>${totalCount}</strong> resources
               </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel hub-converter-card" id="hub-file-converter" style="margin-bottom: 20px; padding: 18px 20px;">
+          <div class="panel-head" style="padding: 0 0 12px; margin: 0;">
+            <div class="panel-title">${getIcon("fileText", 15)} File Converter (.docx ↔ .pdf)</div>
+            <span class="panel-meta">Secure server-side conversion</span>
+          </div>
+          <p style="font-size: 11px; color: var(--oc-muted); margin: 0 0 12px;">Drag and drop a document or browse. Download your converted file instantly.</p>
+          <div class="hub-converter-row">
+            <div class="upload-zone hub-convert-drop" id="hub-convert-drop">
+              <span style="font-size: 12px; font-weight: 700; color: var(--oc-text);">Drop .docx or .pdf here</span>
+              <span class="tt-file-name" id="hub-convert-filename">${state.convertFileName || "No file selected"}</span>
+              <input type="file" id="hub-convert-input" accept=".docx,.pdf,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document" />
+            </div>
+            <div class="hub-converter-actions">
+              <label class="field-label" for="hub-convert-target">Convert to</label>
+              <select id="hub-convert-target" class="field-input">
+                <option value="pdf" ${state.convertTarget === "pdf" ? "selected" : ""}>PDF (.pdf)</option>
+                <option value="docx" ${state.convertTarget === "docx" ? "selected" : ""}>Word (.docx)</option>
+              </select>
+              <button type="button" class="primary-btn" id="btn-hub-convert" ${state.convertBusy ? "disabled" : ""}>
+                ${state.convertBusy ? "Converting…" : `${getIcon("download", 13)} Convert & download`}
+              </button>
             </div>
           </div>
         </section>
@@ -2913,9 +3607,9 @@
           </button>
         </div>
 
-        <div id="thread-scope-filters" style="display: flex; gap: 6px; flex-wrap: wrap; margin: 4px 0 16px;">
+        <div id="thread-scope-filters" class="filter-pill-row" role="tablist" aria-label="Filter threads by scope">
           ${filters.map((f) => `
-            <button type="button" class="notes-subject-pill${state.threadScopeFilter === f.id ? " active" : ""}" data-thread-scope="${f.id}">${f.label}</button>
+            <button type="button" class="notes-subject-pill filter-pill${state.threadScopeFilter === f.id ? " active" : ""}" data-thread-scope="${f.id}">${f.label}</button>
           `).join("")}
         </div>
 
@@ -2928,7 +3622,7 @@
               const selected = active && Number(active.id) === Number(t.id);
               const replies = t.message_count != null ? t.message_count : (t.count || 0);
               return `
-                <button type="button" class="panel" data-action="open-thread" data-id="${t.id}" style="padding: 14px 18px; display: flex; align-items: center; justify-content: space-between; text-align: left; cursor: pointer; width: 100%; font-family: inherit; border: 1px solid ${selected ? "rgba(167,139,250,0.45)" : "rgba(147,133,204,0.14)"}; background: ${selected ? "rgba(167,139,250,0.08)" : "rgba(255,255,255,0.02)"};">
+                <button type="button" class="panel thread-list-card${selected ? " selected" : ""}" data-action="open-thread" data-id="${t.id}">
                   <div style="display: flex; align-items: center; gap: 12px; min-width: 0;">
                     <div class="avatar" style="width: 28px; height: 28px; font-size: 10px;">${initials}</div>
                     <div style="min-width: 0;">
@@ -3146,15 +3840,21 @@
             <label class="upload-zone" id="upload-zone-drop">
               ${getIcon("upload", 28)}
               <strong style="color: var(--oc-text);">Choose submission file</strong>
-              <span>PDF or Image (PNG, JPG) up to 25 MB</span>
-              <input type="file" id="submit-file-input" accept=".pdf,.png,.jpg,.jpeg,.gif" style="display: none;" />
+              <span>PDF, Word (.docx), or image up to 25 MB</span>
+              <input type="file" id="submit-file-input" accept=".pdf,.docx,.png,.jpg,.jpeg,.gif,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document" style="display: none;" />
             </label>
             <div id="selected-file-name" style="font-size: 11px; color: #61d7da; margin-bottom: 12px; text-align: center;"></div>
+            <div id="submit-convert-hint" style="display: none; font-size: 10px; color: var(--oc-muted); text-align: center; margin-bottom: 10px;"></div>
 
-            <div class="modal-actions">
-              <button type="button" class="secondary-btn" id="btn-cancel-modal">Cancel</button>
-              <button type="submit" class="primary-btn" id="btn-do-submit" disabled>
-                ${getIcon("check", 13)} Upload & Submit
+            <div class="modal-actions modal-actions--submit">
+              <div class="modal-actions-start">
+                <button type="button" class="secondary-btn" id="btn-cancel-modal">Cancel</button>
+                <button type="button" class="submit-convert-btn secondary-btn" id="btn-convert-submit" disabled title="Choose a .docx or .pdf file to convert">
+                  Convert &amp; Submit
+                </button>
+              </div>
+              <button type="submit" class="primary-btn modal-submit-primary" id="btn-do-submit" disabled>
+                ${getIcon("check", 13)} Upload &amp; Submit
               </button>
             </div>
           </form>
@@ -3594,6 +4294,11 @@
       btnTheme.addEventListener("click", () => toggleTheme());
     }
 
+    bindAiWidgetEvents();
+    bindWorkspaceSettingsEvents();
+    bindHubConverterEvents();
+    bindFacultyAttendanceUploadEvents();
+
     // Floating action button
     const btnFloating = document.getElementById("btn-floating-action");
     if (btnFloating) {
@@ -3855,7 +4560,68 @@
     const fileInput = document.getElementById("submit-file-input");
     const fileNameDisplay = document.getElementById("selected-file-name");
     const submitBtn = document.getElementById("btn-do-submit");
+    const convertBtn = document.getElementById("btn-convert-submit");
+    const convertHint = document.getElementById("submit-convert-hint");
     let chosenFile = null;
+
+    const submitConvertMeta = (file) => {
+      if (!file || !file.name) {
+        return {
+          ready: false,
+          label: "Convert & Submit",
+          hint: "",
+          title: "Choose a .docx or .pdf file to convert",
+        };
+      }
+      const lower = file.name.toLowerCase();
+      if (lower.endsWith(".docx")) {
+        return {
+          ready: true,
+          label: "Convert to PDF & Submit",
+          hint: "Word file detected — we'll convert to PDF on the server, then submit.",
+          title: "Convert to PDF via /api/tools/convert, then submit",
+        };
+      }
+      if (lower.endsWith(".pdf")) {
+        return {
+          ready: true,
+          label: "Convert to Word & Submit",
+          hint: "PDF detected — we'll convert to Word on the server, then submit.",
+          title: "Convert to Word via /api/tools/convert, then submit",
+        };
+      }
+      return {
+        ready: false,
+        label: "Convert & Submit",
+        hint: "",
+        title: "Conversion is available for .docx and .pdf files only",
+      };
+    };
+
+    const syncSubmitFileUi = () => {
+      const meta = submitConvertMeta(chosenFile);
+      if (convertBtn) {
+        convertBtn.textContent = meta.label;
+        convertBtn.disabled = !meta.ready || state.loading;
+        convertBtn.classList.toggle("submit-convert-btn--ready", meta.ready);
+        convertBtn.title = meta.title;
+      }
+      if (convertHint) {
+        convertHint.textContent = meta.hint;
+        convertHint.style.display = meta.hint ? "block" : "none";
+      }
+      if (submitBtn) submitBtn.disabled = !chosenFile || state.loading;
+    };
+
+    const pickSubmitFile = (file) => {
+      if (!file) return;
+      chosenFile = file;
+      state.submitPendingFile = file;
+      if (fileNameDisplay) {
+        fileNameDisplay.textContent = `Selected: ${chosenFile.name} (${Math.round(chosenFile.size / 1024)} KB)`;
+      }
+      syncSubmitFileUi();
+    };
 
     if (dropZone && fileInput) {
       dropZone.addEventListener("click", () => fileInput.click());
@@ -3864,17 +4630,18 @@
       dropZone.addEventListener("drop", (e) => {
         e.preventDefault();
         dropZone.classList.remove("dragging");
-        if (e.dataTransfer.files.length) {
-          chosenFile = e.dataTransfer.files[0];
-          fileNameDisplay.textContent = `Selected: ${chosenFile.name} (${Math.round(chosenFile.size / 1024)} KB)`;
-          if (submitBtn) submitBtn.disabled = false;
-        }
+        if (e.dataTransfer.files.length) pickSubmitFile(e.dataTransfer.files[0]);
       });
       fileInput.addEventListener("change", () => {
-        if (fileInput.files.length) {
-          chosenFile = fileInput.files[0];
-          fileNameDisplay.textContent = `Selected: ${chosenFile.name} (${Math.round(chosenFile.size / 1024)} KB)`;
-          if (submitBtn) submitBtn.disabled = false;
+        if (fileInput.files.length) pickSubmitFile(fileInput.files[0]);
+      });
+    }
+
+    if (convertBtn) {
+      convertBtn.addEventListener("click", () => {
+        const meta = submitConvertMeta(chosenFile);
+        if (chosenFile && state.modalData && meta.ready) {
+          api.submitAssignment(state.modalData.id, chosenFile, { convertAndSubmit: true });
         }
       });
     }
@@ -4111,6 +4878,216 @@
     bindSubjectBatchPair("sudden-subject", "sudden-batch");
     bindSubjectBatchPair("thread-subject-input", "thread-batch-input");
     scheduleDayRollover();
+  }
+
+  function bindAiWidgetEvents() {
+    const toggle = document.getElementById("btn-ai-widget-toggle");
+    if (toggle) {
+      toggle.addEventListener("click", () => {
+        state.aiWidgetOpen = !state.aiWidgetOpen;
+        render();
+      });
+    }
+    const closeBtn = document.getElementById("btn-ai-close");
+    if (closeBtn) {
+      closeBtn.addEventListener("click", () => {
+        state.aiWidgetOpen = false;
+        render();
+      });
+    }
+    document.querySelectorAll("[data-ai-mode]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        state.aiMode = btn.getAttribute("data-ai-mode") || "study";
+        state.aiEmailDraft = null;
+        render();
+      });
+    });
+    const form = document.getElementById("form-ai-chat");
+    if (form) {
+      form.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const input = document.getElementById("ai-input");
+        const text = (input && input.value || "").trim();
+        if (!text) return;
+        if (state.aiMode === "email") {
+          state.aiMessages = [...(state.aiMessages || []), { role: "user", text, html: escapeHtml(text).replace(/\n/g, "<br>") }];
+          try {
+            const draft = await api.aiDraftEmail(text);
+            state.aiEmailDraft = draft;
+            state.aiMessages = [
+              ...state.aiMessages,
+              {
+                role: "assistant",
+                text: draft.body,
+                html: `<strong>${escapeHtml(draft.subject || "")}</strong><br><br>${formatAiAnswer(draft.body || "")}`,
+              },
+            ];
+            if (input) input.value = "";
+            showToast("Email draft ready");
+          } catch (err) {
+            showToast(`Error: ${err.message}`);
+          }
+          render();
+          return;
+        }
+        state.aiMessages = [...(state.aiMessages || []), { role: "user", text, html: escapeHtml(text) }];
+        render();
+        try {
+          const subj = state.notesSubjectFilter && state.notesSubjectFilter !== "All" ? state.notesSubjectFilter : null;
+          const data = await api.aiAsk(text, subj);
+          state.aiMessages = [
+            ...state.aiMessages,
+            {
+              role: "assistant",
+              text: data.answer,
+              html: formatAiAnswer(data.answer),
+              sources: data.sources || [],
+            },
+          ];
+          if (input) input.value = "";
+        } catch (err) {
+          showToast(`Error: ${err.message}`);
+        }
+        render();
+      });
+    }
+  }
+
+  function bindWorkspaceSettingsEvents() {
+    const saveBtn = document.getElementById("btn-save-workspace-settings");
+    if (saveBtn) {
+      saveBtn.addEventListener("click", () => {
+        const nameEl = document.getElementById("settings-display-name");
+        state.workspaceSettings = state.workspaceSettings || {};
+        if (nameEl) state.workspaceSettings.displayName = nameEl.value.trim();
+        const c1 = document.getElementById("toggle-notify-class");
+        const c2 = document.getElementById("toggle-notify-assignments");
+        const g = document.getElementById("toggle-google-cal");
+        const m = document.getElementById("toggle-ms-365");
+        if (c1) state.workspaceSettings.notifyClassStart = c1.checked;
+        if (c2) state.workspaceSettings.notifyAssignments = c2.checked;
+        if (g) state.workspaceSettings.googleCalendar = g.checked;
+        if (m) state.workspaceSettings.microsoft365 = m.checked;
+        if (state.user && state.workspaceSettings.displayName) {
+          state.user.name = state.workspaceSettings.displayName;
+          try { localStorage.setItem("openclass_user", JSON.stringify(state.user)); } catch (e) {}
+        }
+        persistWorkspaceSettings();
+        showToast("Workspace settings saved");
+        render();
+      });
+    }
+    const light = document.getElementById("btn-settings-theme-light");
+    const dark = document.getElementById("btn-settings-theme-dark");
+    if (light) light.addEventListener("click", () => { state.theme = "light"; applyTheme(); try { localStorage.setItem("openclass_theme", "light"); } catch (e) {} render(); });
+    if (dark) dark.addEventListener("click", () => { state.theme = "dark"; applyTheme(); try { localStorage.setItem("openclass_theme", "dark"); } catch (e) {} render(); });
+  }
+
+  function bindFacultyAttendanceUploadEvents() {
+    const input = document.getElementById("faculty-attendance-input");
+    const drop = document.getElementById("faculty-attendance-drop");
+    const runBtn = document.getElementById("btn-faculty-attendance-upload");
+
+    const pick = (file) => {
+      if (!file) return;
+      state.facultyAttendanceFile = file;
+      render();
+    };
+
+    if (input) input.addEventListener("change", () => pick(input.files && input.files[0]));
+    if (drop) {
+      drop.addEventListener("dragover", (e) => { e.preventDefault(); drop.classList.add("dragging"); });
+      drop.addEventListener("dragleave", () => drop.classList.remove("dragging"));
+      drop.addEventListener("drop", (e) => {
+        e.preventDefault();
+        drop.classList.remove("dragging");
+        pick(e.dataTransfer.files && e.dataTransfer.files[0]);
+      });
+    }
+    if (runBtn) {
+      runBtn.addEventListener("click", async () => {
+        const file = state.facultyAttendanceFile;
+        if (!file) {
+          showToast("Choose a CSV or Excel attendance file first");
+          return;
+        }
+        state.facultyAttendanceUploadBusy = true;
+        render();
+        try {
+          const result = await api.uploadFacultyAttendance(file);
+          showToast(`Attendance updated for ${result.updated || 0} rows`);
+          state.facultyAttendanceFile = null;
+          await api.loadFacultyAttendanceSummary();
+        } catch (err) {
+          showToast(`Error: ${err.message}`);
+        } finally {
+          state.facultyAttendanceUploadBusy = false;
+          render();
+        }
+      });
+    }
+  }
+
+  function bindHubConverterEvents() {
+    const input = document.getElementById("hub-convert-input");
+    const drop = document.getElementById("hub-convert-drop");
+    const target = document.getElementById("hub-convert-target");
+    const runBtn = document.getElementById("btn-hub-convert");
+
+    const pickFile = (file) => {
+      if (!file) return;
+      state.hubConvertFile = file;
+      state.convertFileName = file.name;
+      render();
+    };
+
+    if (input) {
+      input.addEventListener("change", () => pickFile(input.files && input.files[0]));
+    }
+    if (drop) {
+      drop.addEventListener("dragover", (e) => { e.preventDefault(); drop.classList.add("dragging"); });
+      drop.addEventListener("dragleave", () => drop.classList.remove("dragging"));
+      drop.addEventListener("drop", (e) => {
+        e.preventDefault();
+        drop.classList.remove("dragging");
+        pickFile(e.dataTransfer.files && e.dataTransfer.files[0]);
+      });
+    }
+    if (target) {
+      target.addEventListener("change", () => {
+        state.convertTarget = target.value;
+      });
+    }
+    if (runBtn) {
+      runBtn.addEventListener("click", async () => {
+        const file = state.hubConvertFile;
+        if (!file) {
+          showToast("Choose a .docx or .pdf file first");
+          return;
+        }
+        state.convertBusy = true;
+        render();
+        try {
+          const blob = await api.convertDocument(file, state.convertTarget || "pdf");
+          const ext = (state.convertTarget || "pdf") === "pdf" ? "pdf" : "docx";
+          const base = file.name.replace(/\.[^.]+$/, "");
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = `${base}-converted.${ext}`;
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          URL.revokeObjectURL(url);
+          showToast("Download started");
+        } catch (err) {
+          showToast(`Error: ${err.message}`);
+        } finally {
+          state.convertBusy = false;
+          render();
+        }
+      });
+    }
   }
 
   function renderToast() {

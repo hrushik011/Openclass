@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 900" fill="none" preserveAspectRatio="xMidYMid slice">
+  <ellipse cx="1180" cy="120" rx="380" ry="320" stroke="currentColor" stroke-width="2.2" opacity="0.22"/>
+  <ellipse cx="1180" cy="120" rx="300" ry="250" stroke="currentColor" stroke-width="1.8" opacity="0.18"/>
+  <ellipse cx="1180" cy="120" rx="220" ry="180" stroke="currentColor" stroke-width="1.4" opacity="0.14"/>
+  <path d="M-80 720 C 120 520, 420 880, 640 620 C 860 360, 1080 780, 1320 480" stroke="currentColor" stroke-width="2" stroke-linecap="round" opacity="0.2"/>
+  <path d="M40 820 C 280 620, 520 920, 760 680 C 1000 440, 1200 820, 1480 560" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" opacity="0.16"/>
+  <ellipse cx="160" cy="780" rx="280" ry="240" stroke="currentColor" stroke-width="2" opacity="0.18"/>
+  <ellipse cx="160" cy="780" rx="200" ry="170" stroke="currentColor" stroke-width="1.5" opacity="0.14"/>
+  <circle cx="720" cy="450" r="420" stroke="currentColor" stroke-width="1.2" opacity="0.08"/>
+  <circle cx="720" cy="450" r="340" stroke="currentColor" stroke-width="1" opacity="0.06"/>
+</svg>
