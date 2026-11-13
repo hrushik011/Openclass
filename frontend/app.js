@@ -60,6 +60,12 @@
     facultyAttendanceFile: null,
     facultyAttendanceUploadBusy: false,
     submitPendingFile: null,
+    credentials: [],
+    integrations: [],
+    credentialIngestBusy: false,
+    integrationSyncBusy: null,
+    certificateUploadBusy: false,
+    certificateFileName: "",
     workspaceSettings: (() => {
       try {
         const raw = localStorage.getItem("openclass_workspace_settings");
@@ -700,7 +706,8 @@
       download: `<svg width="${s}" height="${s}" class="${className}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>`,
       shield: `<svg width="${s}" height="${s}" class="${className}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>`,
       fileText: `<svg width="${s}" height="${s}" class="${className}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>`,
-      attendance: `<svg width="${s}" height="${s}" class="${className}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"></path><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path></svg>`
+      attendance: `<svg width="${s}" height="${s}" class="${className}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"></path><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path></svg>`,
+      trophy: `<svg width="${s}" height="${s}" class="${className}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 21h8"></path><path d="M12 17v4"></path><path d="M7 4h10v5a5 5 0 0 1-10 0V4z"></path><path d="M5 4H3v2a4 4 0 0 0 4 4"></path><path d="M19 4h2v2a4 4 0 0 1-4 4"></path></svg>`
     };
     return icons[name] || "";
   }
@@ -983,8 +990,136 @@
         await api.loadStudentAttendance();
         await api.loadFacultyAttendanceSummary();
         await api.loadThreads();
+        if (isStudent) await api.loadCredentials();
       } catch (e) {
         console.error("Data fetch error", e);
+      }
+    },
+
+    async loadCredentials() {
+      if (!state.token) return;
+      try {
+        const res = await fetch("/api/student/credentials", { headers: api.headers() });
+        if (!res.ok) return;
+        const data = await res.json();
+        state.credentials = data.credentials || [];
+        state.integrations = data.integrations || [];
+      } catch (e) {
+        console.warn("Credentials fetch failed", e);
+      }
+    },
+
+    async ingestCredentialUrl(url) {
+      state.credentialIngestBusy = true;
+      render();
+      try {
+        const res = await fetch("/api/student/credentials/ingest-url", {
+          method: "POST",
+          headers: api.headers(),
+          body: JSON.stringify({ url }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || "Could not ingest URL");
+        await api.loadCredentials();
+        showToast("Credential card added");
+        return data.credential;
+      } finally {
+        state.credentialIngestBusy = false;
+        render();
+      }
+    },
+
+    async connectIntegration(platform, accessToken, profileUrl) {
+      state.loading = true;
+      render();
+      try {
+        const res = await fetch("/api/integrations/connect", {
+          method: "POST",
+          headers: api.headers(),
+          body: JSON.stringify({
+            platform,
+            access_token: accessToken,
+            profile_url: profileUrl || null,
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || "Connect failed");
+        showToast(`${platform} connected`);
+        await api.loadCredentials();
+      } finally {
+        state.loading = false;
+        render();
+      }
+    },
+
+    async syncIntegration(platform) {
+      state.integrationSyncBusy = platform;
+      render();
+      try {
+        const res = await fetch(`/api/integrations/${encodeURIComponent(platform)}/sync`, {
+          method: "POST",
+          headers: api.headers(),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || "Sync failed");
+        showToast(`Synced ${data.imported || 0} credential(s) from ${platform}`);
+        await api.loadCredentials();
+      } finally {
+        state.integrationSyncBusy = null;
+        render();
+      }
+    },
+
+    async uploadCredential(file, fields = {}) {
+      state.certificateUploadBusy = true;
+      render();
+      try {
+        const fd = new FormData();
+        fd.append("file", file);
+        if (fields.title) fd.append("title", fields.title);
+        if (fields.issuer) fd.append("issuer", fields.issuer);
+        if (fields.description) fd.append("description", fields.description);
+        if (fields.verify_url) fd.append("verify_url", fields.verify_url);
+        const res = await fetch("/api/student/credentials/upload", {
+          method: "POST",
+          headers: authHeadersOnly(),
+          body: fd,
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || "Upload failed");
+        await api.loadCredentials();
+        showToast("Certificate saved to My Achievements");
+        return data.credential;
+      } finally {
+        state.certificateUploadBusy = false;
+        state.certificateFileName = "";
+        render();
+      }
+    },
+
+    async openCredentialDownload(credentialId) {
+      const res = await fetch(`/api/student/credentials/${credentialId}/download`, {
+        headers: authHeadersOnly(),
+      });
+      if (!res.ok) throw new Error("Could not open certificate file");
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      window.open(url, "_blank", "noopener,noreferrer");
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+    },
+
+    async deleteCredential(credentialId) {
+      try {
+        const res = await fetch(`/api/student/credentials/${credentialId}`, {
+          method: "DELETE",
+          headers: api.headers(),
+        });
+        if (!res.ok) throw new Error("Could not remove credential");
+        await api.loadCredentials();
+        showToast("Credential removed");
+        render();
+      } catch (e) {
+        showToast(`Error: ${e.message}`);
       }
     },
 
@@ -2077,11 +2212,12 @@
         { label: "Assignments", icon: "assignment" },
         { label: "Class Threads", icon: "threads" },
         { label: "Knowledge Hub", id: "knowledge-hub", icon: "hub" },
+        { label: "My Achievements", id: "my-achievements", icon: "trophy" },
         { label: "People", icon: "people" }
       ];
 
     // Ensure valid currentTab for role
-    const validTabs = ["Dashboard", "My Timetable", "Attendance", "Timetable & Attendance", "Attendance Analytics", "Assignments", "Assignments & Sessions", "Class Threads", "People", "Knowledge Hub", "knowledge-hub"];
+    const validTabs = ["Dashboard", "My Timetable", "Attendance", "Timetable & Attendance", "Attendance Analytics", "Assignments", "Assignments & Sessions", "Class Threads", "People", "Knowledge Hub", "knowledge-hub", "My Achievements", "my-achievements"];
     if (!validTabs.includes(state.currentTab) && state.currentTab !== "Workspace Settings") {
       state.currentTab = "Dashboard";
     }
@@ -2104,7 +2240,8 @@
             const isActive =
               state.currentTab === item.label ||
               state.currentTab === tabKey ||
-              (item.label === "Knowledge Hub" && (state.currentTab === "knowledge-hub" || state.currentTab === "Knowledge Hub"));
+              (item.label === "Knowledge Hub" && (state.currentTab === "knowledge-hub" || state.currentTab === "Knowledge Hub")) ||
+              (item.label === "My Achievements" && (state.currentTab === "my-achievements" || state.currentTab === "My Achievements"));
             return `
                     <button class="nav-item ${isActive ? "active" : ""}" data-tab="${tabKey}">
                       ${getIcon(item.icon, 16)}
@@ -2374,6 +2511,9 @@
       case "knowledge-hub":
       case "Knowledge-Hub":
         return renderKnowledgeHub();
+      case "My Achievements":
+      case "my-achievements":
+        return renderMyAchievementsView();
       case "Workspace Settings":
         return renderWorkspaceSettings();
       default:
@@ -3177,6 +3317,176 @@
         </section>
       </div>
     `;
+  }
+
+  function platformBrandLabel(platform) {
+    const p = String(platform || "web").toLowerCase();
+    if (p === "coursera") return "Coursera";
+    if (p === "udemy") return "Udemy";
+    if (p === "github") return "GitHub";
+    if (p === "credly") return "Credly";
+    if (p === "edx") return "edX";
+    if (p === "local") return "Uploaded";
+    return "Credential";
+  }
+
+  function integrationConnected(platform) {
+    return (state.integrations || []).some((row) => String(row.platform).toLowerCase() === platform);
+  }
+
+  function renderCredentialCard(item) {
+    const img = item.image_url
+      ? `<img class="credential-card-img" src="${escapeHtml(item.image_url)}" alt="" loading="lazy" referrerpolicy="no-referrer" />`
+      : `<div class="credential-card-img credential-card-img--placeholder">${getIcon("assignment", 22)}</div>`;
+    const rawDesc = item.description || "";
+    const desc = rawDesc ? escapeHtml(rawDesc).slice(0, 160) : "";
+    const hasFile = item.has_file || item.source === "local_upload";
+    const externalVerify = item.verify_url && /^https?:\/\//i.test(item.verify_url);
+    const primaryBtn = hasFile
+      ? `<button type="button" class="mini-btn primary" data-action="open-credential-download" data-id="${item.id}">${getIcon("download", 12)} View file</button>`
+      : (externalVerify
+        ? `<a href="${escapeHtml(item.verify_url)}" target="_blank" rel="noopener noreferrer" class="mini-btn primary">Verify</a>`
+        : "");
+    return `
+      <article class="credential-card panel">
+        ${img}
+        <div class="credential-card-body">
+          <span class="credential-platform-pill">${escapeHtml(platformBrandLabel(item.platform))}</span>
+          <strong class="credential-card-title">${escapeHtml(item.title || "Credential")}</strong>
+          ${item.issuer ? `<span class="credential-card-issuer">${escapeHtml(item.issuer)}</span>` : ""}
+          ${item.original_filename ? `<span class="credential-card-issuer">${escapeHtml(item.original_filename)}</span>` : ""}
+          ${desc ? `<p class="credential-card-desc">${desc}${rawDesc.length > 160 ? "…" : ""}</p>` : ""}
+          <div class="credential-card-actions">
+            ${primaryBtn}
+            <button type="button" class="mini-btn danger" data-action="delete-credential" data-id="${item.id}">Remove</button>
+          </div>
+        </div>
+      </article>
+    `;
+  }
+
+  function renderMyAchievementsView() {
+    if (state.role === "faculty") {
+      return `<div class="student-view"><p style="color: var(--oc-muted); padding: 24px;">My Achievements is available in the student workspace.</p></div>`;
+    }
+    const creds = state.credentials || [];
+    const platforms = [
+      { id: "coursera", label: "Coursera", hint: "API token + public profile URL" },
+      { id: "udemy", label: "Udemy", hint: "Instructor API token + profile URL" },
+      { id: "github", label: "GitHub", hint: "Personal access token (repo read)" },
+    ];
+    return `
+      <div class="achievements-view">
+        <div class="hero-row">
+          <div>
+            <div class="eyebrow">Student Portfolio</div>
+            <h1 class="hero-title">My Achievements.</h1>
+            <p class="hero-copy">Upload inter-college certificates, sync MOOC credentials, and keep every badge in one place.</p>
+          </div>
+          <div class="date-note">Saved <b>${creds.length}</b></div>
+        </div>
+
+        <section class="panel achievements-upload-hero" id="achievements-upload-card">
+          <div class="achievements-upload-head">
+            <div class="achievements-upload-icon">${getIcon("upload", 28)}</div>
+            <div>
+              <h2 class="achievements-upload-title">Upload Certificate</h2>
+              <p class="achievements-upload-sub">PDF, PNG, or JPG .</p>
+            </div>
+          </div>
+          <div class="upload-zone achievements-upload-drop" id="achievements-cert-drop">
+            <strong>${state.certificateFileName || "Drop your certificate here or browse"}</strong>
+            <span>Max 15 MB · PDF / PNG / JPG</span>
+            <input type="file" id="achievements-cert-input" accept=".pdf,.png,.jpg,.jpeg,application/pdf,image/png,image/jpeg" />
+          </div>
+          <div class="achievements-upload-meta">
+            <div class="achievements-meta-field">
+              <label class="field-label" for="cert-upload-title">Title (optional)</label>
+              <input id="cert-upload-title" class="field-input" placeholder="e.g. Inter-college hackathon winner" />
+            </div>
+            <div class="achievements-meta-field">
+              <label class="field-label" for="cert-upload-issuer">Issuer (optional)</label>
+              <input id="cert-upload-issuer" class="field-input" placeholder="e.g. ABC Institute / Event name" />
+            </div>
+          </div>
+          <details class="achievements-optional-details">
+            <summary>Verification link &amp; notes (optional)</summary>
+            <div class="achievements-meta-field" style="margin-top: 10px;">
+              <label class="field-label" for="cert-upload-verify">Public verify URL</label>
+              <input id="cert-upload-verify" class="field-input" type="url" placeholder="https://…" />
+            </div>
+            <label class="field-label" for="cert-upload-notes">Notes</label>
+            <textarea id="cert-upload-notes" class="field-input" rows="2" placeholder="Award date, category, etc." style="resize: vertical;"></textarea>
+          </details>
+          <button type="button" class="primary-btn achievements-upload-submit" id="btn-certificate-upload" ${state.certificateUploadBusy ? "disabled" : ""}>
+            ${state.certificateUploadBusy ? "Uploading…" : `${getIcon("check", 13)} Save certificate`}
+          </button>
+        </section>
+
+        <section class="panel hub-credentials-panel achievements-secondary-panel">
+          <div class="panel-head" style="padding: 0 0 12px; margin: 0;">
+            <div class="panel-title">${getIcon("sparkles", 15)} Smart link &amp; cloud sync</div>
+            <span class="panel-meta">Optional</span>
+          </div>
+          <p style="font-size: 11px; color: var(--oc-muted); margin: 0 0 14px;">
+            Paste a public verification link or connect Coursera, Udemy, or GitHub to import certificates automatically.
+          </p>
+
+          <div class="credential-url-ingest">
+            <label class="field-label" for="credential-url-input">Smart link ingestion</label>
+            <div class="credential-url-row">
+              <input
+                id="credential-url-input"
+                class="field-input"
+                type="url"
+                placeholder="https://www.coursera.org/verify/… or https://www.credly.com/badges/…"
+                autocomplete="off"
+              />
+              <button type="button" class="primary-btn" id="btn-credential-ingest" ${state.credentialIngestBusy ? "disabled" : ""}>
+                ${state.credentialIngestBusy ? "Fetching…" : "Preview &amp; save"}
+              </button>
+            </div>
+          </div>
+
+        <div class="integration-sync-grid">
+          ${platforms.map((p) => {
+            const connected = integrationConnected(p.id);
+            const busy = state.integrationSyncBusy === p.id;
+            return `
+              <motionless class="integration-sync-card panel" data-platform="${p.id}">
+                <div class="integration-sync-head">
+                  <strong>${p.label}</strong>
+                  <span class="status-pill" style="font-size: 9px;">${connected ? "Connected" : "Not connected"}</span>
+                </div>
+                <p style="font-size: 10px; color: var(--oc-muted); margin: 6px 0 10px;">${p.hint}</p>
+                <input class="field-input integration-token" type="password" placeholder="Access / API token" autocomplete="off" data-platform-token="${p.id}" />
+                ${p.id !== "github" ? `
+                  <input class="field-input integration-profile" type="url" placeholder="Public profile URL (required for sync)" data-platform-profile="${p.id}" style="margin-top: 8px;" />
+                ` : ""}
+                <div class="integration-sync-actions">
+                  <button type="button" class="secondary-btn" data-action="connect-integration" data-platform="${p.id}">Connect</button>
+                  <button type="button" class="primary-btn" data-action="sync-integration" data-platform="${p.id}" ${!connected || busy ? "disabled" : ""}>
+                    ${busy ? "Syncing…" : "Sync now"}
+                  </button>
+                </div>
+              </motionless>
+            `;
+          }).join("")}
+        </div>
+
+        </section>
+
+        <section class="panel" style="padding: 18px 20px;">
+          <div class="panel-head" style="padding: 0 0 12px; margin: 0;">
+            <div class="panel-title">${getIcon("trophy", 15)} Your credential gallery</div>
+          </div>
+          <div class="credentials-card-grid">
+            ${!creds.length ? `<p style="font-size: 11px; color: var(--oc-muted); grid-column: 1 / -1;">Upload a certificate above, paste a verify link, or sync a connected platform.</p>` : ""}
+            ${creds.map(renderCredentialCard).join("")}
+          </div>
+        </section>
+      </div>
+    `.replace(/<motionless/g, "<div").replace(/<\/motionless>/g, "</div>");
   }
 
   // --- 4b. Dedicated Course Knowledge Hub & Repository ---
@@ -4268,6 +4578,10 @@
         const tab = btn.dataset.tab;
         if (tab) {
           state.currentTab = tab;
+          if (tab === "my-achievements" || tab === "My Achievements") {
+            api.loadCredentials().then(() => render());
+            return;
+          }
           render();
         }
       });
@@ -4298,6 +4612,7 @@
     bindWorkspaceSettingsEvents();
     bindHubConverterEvents();
     bindFacultyAttendanceUploadEvents();
+    bindAchievementsEvents();
 
     // Floating action button
     const btnFloating = document.getElementById("btn-floating-action");
@@ -4981,6 +5296,129 @@
     const dark = document.getElementById("btn-settings-theme-dark");
     if (light) light.addEventListener("click", () => { state.theme = "light"; applyTheme(); try { localStorage.setItem("openclass_theme", "light"); } catch (e) {} render(); });
     if (dark) dark.addEventListener("click", () => { state.theme = "dark"; applyTheme(); try { localStorage.setItem("openclass_theme", "dark"); } catch (e) {} render(); });
+  }
+
+  function bindAchievementsEvents() {
+    const certInput = document.getElementById("achievements-cert-input");
+    const certDrop = document.getElementById("achievements-cert-drop");
+    const certUploadBtn = document.getElementById("btn-certificate-upload");
+    let certFile = null;
+
+    const setCertFile = (file) => {
+      if (!file) return;
+      certFile = file;
+      state.certificateFileName = file.name;
+      render();
+    };
+
+    if (certInput) {
+      certInput.addEventListener("change", () => setCertFile(certInput.files && certInput.files[0]));
+    }
+    if (certDrop && certInput) {
+      certDrop.addEventListener("click", () => certInput.click());
+      certDrop.addEventListener("dragover", (e) => { e.preventDefault(); certDrop.classList.add("dragging"); });
+      certDrop.addEventListener("dragleave", () => certDrop.classList.remove("dragging"));
+      certDrop.addEventListener("drop", (e) => {
+        e.preventDefault();
+        certDrop.classList.remove("dragging");
+        setCertFile(e.dataTransfer.files && e.dataTransfer.files[0]);
+      });
+    }
+    if (certUploadBtn) {
+      certUploadBtn.addEventListener("click", async () => {
+        if (!certFile) {
+          showToast("Choose a PDF or image certificate first");
+          return;
+        }
+        const titleEl = document.getElementById("cert-upload-title");
+        const issuerEl = document.getElementById("cert-upload-issuer");
+        const verifyEl = document.getElementById("cert-upload-verify");
+        const notesEl = document.getElementById("cert-upload-notes");
+        try {
+          await api.uploadCredential(certFile, {
+            title: titleEl && titleEl.value.trim(),
+            issuer: issuerEl && issuerEl.value.trim(),
+            verify_url: verifyEl && verifyEl.value.trim(),
+            description: notesEl && notesEl.value.trim(),
+          });
+          certFile = null;
+          if (titleEl) titleEl.value = "";
+          if (issuerEl) issuerEl.value = "";
+          if (verifyEl) verifyEl.value = "";
+          if (notesEl) notesEl.value = "";
+        } catch (e) {
+          showToast(`Error: ${e.message}`);
+        }
+      });
+    }
+
+    const ingestBtn = document.getElementById("btn-credential-ingest");
+    const urlInput = document.getElementById("credential-url-input");
+    if (ingestBtn && urlInput) {
+      ingestBtn.addEventListener("click", async () => {
+        const url = (urlInput.value || "").trim();
+        if (!url) {
+          showToast("Paste a verification URL first");
+          return;
+        }
+        try {
+          await api.ingestCredentialUrl(url);
+          urlInput.value = "";
+        } catch (e) {
+          showToast(`Error: ${e.message}`);
+        }
+      });
+    }
+
+    document.querySelectorAll("[data-action='connect-integration']").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const platform = btn.getAttribute("data-platform");
+        const tokenEl = document.querySelector(`[data-platform-token="${platform}"]`);
+        const profileEl = document.querySelector(`[data-platform-profile="${platform}"]`);
+        const token = tokenEl && tokenEl.value ? tokenEl.value.trim() : "";
+        const profile = profileEl && profileEl.value ? profileEl.value.trim() : "";
+        if (!token) {
+          showToast("Enter an access token");
+          return;
+        }
+        try {
+          await api.connectIntegration(platform, token, profile || null);
+          if (tokenEl) tokenEl.value = "";
+        } catch (e) {
+          showToast(`Error: ${e.message}`);
+        }
+      });
+    });
+
+    document.querySelectorAll("[data-action='sync-integration']").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const platform = btn.getAttribute("data-platform");
+        try {
+          await api.syncIntegration(platform);
+        } catch (e) {
+          showToast(`Error: ${e.message}`);
+        }
+      });
+    });
+
+    document.querySelectorAll("[data-action='delete-credential']").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const id = Number(btn.getAttribute("data-id"));
+        if (id) api.deleteCredential(id);
+      });
+    });
+
+    document.querySelectorAll("[data-action='open-credential-download']").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const id = Number(btn.getAttribute("data-id"));
+        if (!id) return;
+        try {
+          await api.openCredentialDownload(id);
+        } catch (e) {
+          showToast(`Error: ${e.message}`);
+        }
+      });
+    });
   }
 
   function bindFacultyAttendanceUploadEvents() {

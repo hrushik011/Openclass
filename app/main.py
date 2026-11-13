@@ -29,6 +29,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Stre
 from fastapi.staticfiles import StaticFiles
 from google_auth_oauthlib.flow import Flow
 from pydantic import BaseModel
+import requests
 from starlette.middleware.sessions import SessionMiddleware
 
 from .auth import (
@@ -77,6 +78,23 @@ from .services.reminders import run_scheduled_email_jobs
 from .services.ai_gemini import gather_study_context, gemini_email_draft, gemini_study_answer, get_genai_client
 from .services.file_convert import convert_document
 from .services.attendance_upload import apply_attendance_rows, fetch_subject_snapshots, parse_attendance_upload
+from .services.credentials import (
+    ALLOWED_PLATFORMS,
+    ALLOWED_UPLOAD_SUFFIX,
+    MAX_UPLOAD_BYTES,
+    delete_credential,
+    disconnect_integration,
+    extract_open_graph,
+    get_credential_for_student,
+    list_credentials,
+    list_integrations,
+    resolve_student_id,
+    save_integration,
+    save_local_credential,
+    sync_platform,
+    upsert_credential,
+    validate_integration_token,
+)
 from .services.platform_notifications import (
     notify_assignment_published,
     notify_class_session_published,
@@ -2520,6 +2538,210 @@ def post_thread_message(
     background_tasks.add_task(_dispatch_thread_emails, thread, author_name, author_role, body)
     return message
 
+
+
+# --- Credentials & cloud integrations ---
+
+
+class CredentialIngestPayload(BaseModel):
+    url: str
+
+
+class IntegrationConnectPayload(BaseModel):
+    platform: str
+    access_token: str
+    profile_url: Optional[str] = None
+    account_label: Optional[str] = None
+
+
+def _require_student_user(current_user: Optional[dict]) -> dict:
+    if not current_user:
+        raise HTTPException(status_code=401, detail="Sign in required")
+    role = str(current_user.get("role") or "").upper()
+    if role != "STUDENT":
+        raise HTTPException(status_code=403, detail="Students only")
+    return current_user
+
+
+@app.get("/api/student/credentials")
+def student_credentials_list(current_user: dict = Depends(get_current_user)):
+    user = _require_student_user(current_user)
+    sid = resolve_student_id(user)
+    return {"credentials": list_credentials(sid), "integrations": list_integrations(sid)}
+
+
+@app.post("/api/student/credentials/ingest-url")
+def student_credential_ingest_url(
+    payload: CredentialIngestPayload,
+    current_user: dict = Depends(get_current_user),
+):
+    """Fetch public verification page meta-tags and store a credential card."""
+    user = _require_student_user(current_user)
+    sid = resolve_student_id(user)
+    url = (payload.url or "").strip()
+    if not url or not url.startswith(("http://", "https://")):
+        raise HTTPException(status_code=400, detail="Provide a valid https URL")
+    if len(url) > 2000:
+        raise HTTPException(status_code=400, detail="URL is too long")
+    try:
+        meta = extract_open_graph(url)
+        card = upsert_credential(sid, meta, source="url_ingest")
+        return {"credential": card, "preview": meta}
+    except requests.RequestException as exc:
+        raise HTTPException(status_code=502, detail=f"Could not fetch URL: {exc}") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.delete("/api/student/credentials/{credential_id}")
+def student_credential_delete(
+    credential_id: int,
+    current_user: dict = Depends(get_current_user),
+):
+    user = _require_student_user(current_user)
+    sid = resolve_student_id(user)
+    if not delete_credential(sid, credential_id):
+        raise HTTPException(status_code=404, detail="Credential not found")
+    return {"status": "deleted", "id": credential_id}
+
+
+@app.post("/api/student/credentials/upload")
+async def student_credential_upload(
+    file: UploadFile = File(...),
+    title: Optional[str] = Form(None),
+    issuer: Optional[str] = Form(None),
+    description: Optional[str] = Form(None),
+    verify_url: Optional[str] = Form(None),
+    current_user: dict = Depends(get_current_user),
+):
+    """Upload offline certificate files (PDF, PNG, JPG)."""
+    user = _require_student_user(current_user)
+    sid = resolve_student_id(user)
+    original = (file.filename or "certificate.pdf").strip()
+    suffix = Path(original).suffix.lower()
+    if suffix not in ALLOWED_UPLOAD_SUFFIX:
+        raise HTTPException(status_code=400, detail="Upload a PDF, PNG, or JPG certificate")
+
+    content = await file.read()
+    if len(content) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=400, detail="File too large (max 15MB)")
+    if not content:
+        raise HTTPException(status_code=400, detail="Empty file")
+
+    import uuid as _uuid
+
+    dest_dir = Path(UPLOAD_DIR) / "credentials" / sid
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    stored_name = f"{_uuid.uuid4().hex}{suffix}"
+    disk_path = dest_dir / stored_name
+    disk_path.write_bytes(content)
+
+    display_title = (title or "").strip() or Path(original).stem.replace("_", " ")
+    card = save_local_credential(
+        sid,
+        disk_path=disk_path,
+        original_filename=original,
+        title=display_title,
+        issuer=(issuer or "").strip() or None,
+        description=(description or "").strip() or None,
+        verify_url=(verify_url or "").strip() or None,
+    )
+    return {"credential": card}
+
+
+@app.get("/api/student/credentials/{credential_id}/download")
+def student_credential_download(
+    credential_id: int,
+    current_user: dict = Depends(get_current_user),
+):
+    user = _require_student_user(current_user)
+    sid = resolve_student_id(user)
+    card = get_credential_for_student(sid, credential_id)
+    if not card or not card.get("file_path"):
+        raise HTTPException(status_code=404, detail="Certificate file not found")
+    path = Path(card["file_path"])
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="File missing on server")
+    filename = card.get("original_filename") or path.name
+    media = "application/pdf"
+    if path.suffix.lower() in {".png"}:
+        media = "image/png"
+    elif path.suffix.lower() in {".jpg", ".jpeg"}:
+        media = "image/jpeg"
+    return FileResponse(path, filename=filename, media_type=media)
+
+
+@app.get("/api/integrations/status")
+def integrations_status(current_user: dict = Depends(get_current_user)):
+    user = _require_student_user(current_user)
+    sid = resolve_student_id(user)
+    connected = {row["platform"] for row in list_integrations(sid)}
+    return {
+        "platforms": sorted(ALLOWED_PLATFORMS),
+        "connected": sorted(connected),
+        "integrations": list_integrations(sid),
+        "supports_oauth": {
+            "github": bool(os.getenv("GITHUB_CLIENT_ID")),
+            "coursera": False,
+            "udemy": False,
+        },
+    }
+
+
+@app.post("/api/integrations/connect")
+def integrations_connect(
+    payload: IntegrationConnectPayload,
+    current_user: dict = Depends(get_current_user),
+):
+    user = _require_student_user(current_user)
+    sid = resolve_student_id(user)
+    platform = (payload.platform or "").lower().strip()
+    if platform not in ALLOWED_PLATFORMS:
+        raise HTTPException(status_code=400, detail=f"Platform must be one of: {', '.join(sorted(ALLOWED_PLATFORMS))}")
+    token = (payload.access_token or "").strip()
+    if not token:
+        raise HTTPException(status_code=400, detail="access_token is required")
+    try:
+        label = validate_integration_token(platform, token, payload.profile_url)
+        account_label = payload.account_label or label
+        result = save_integration(
+            sid,
+            platform,
+            token,
+            account_label=account_label,
+            profile_url=payload.profile_url,
+        )
+        return result
+    except requests.RequestException as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/integrations/{platform}/sync")
+def integrations_sync_platform(
+    platform: str,
+    current_user: dict = Depends(get_current_user),
+):
+    user = _require_student_user(current_user)
+    sid = resolve_student_id(user)
+    try:
+        return sync_platform(sid, platform)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except requests.RequestException as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@app.delete("/api/integrations/{platform}")
+def integrations_disconnect(
+    platform: str,
+    current_user: dict = Depends(get_current_user),
+):
+    user = _require_student_user(current_user)
+    sid = resolve_student_id(user)
+    disconnect_integration(sid, platform)
+    return {"status": "disconnected", "platform": platform.lower()}
 
 
 # --- AI & file conversion ---

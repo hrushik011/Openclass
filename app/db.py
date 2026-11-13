@@ -201,6 +201,38 @@ CREATE TABLE IF NOT EXISTS student_subject_attendance (
     UNIQUE(student_id, subject)
 );
 
+CREATE TABLE IF NOT EXISTS student_credentials (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    student_id TEXT NOT NULL,
+    source TEXT NOT NULL,
+    platform TEXT,
+    title TEXT NOT NULL,
+    issuer TEXT,
+    description TEXT,
+    image_url TEXT,
+    verify_url TEXT NOT NULL,
+    issued_at TEXT,
+    meta_json TEXT,
+    file_path TEXT,
+    original_filename TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(student_id, verify_url)
+);
+
+CREATE TABLE IF NOT EXISTS student_integration_connections (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    student_id TEXT NOT NULL,
+    platform TEXT NOT NULL,
+    access_token TEXT NOT NULL,
+    token_type TEXT,
+    account_label TEXT,
+    scopes TEXT,
+    connected_at TEXT NOT NULL,
+    last_sync_at TEXT,
+    UNIQUE(student_id, platform)
+);
+
 CREATE TABLE IF NOT EXISTS threads (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     title TEXT NOT NULL,
@@ -447,6 +479,8 @@ def initialize():
         _add_column_if_missing(db, "delivery_log", "assignment_id", "INTEGER")
         _add_column_if_missing(db, "assignment_reminder_logs", "reminder_type", "TEXT")
         _add_column_if_missing(db, "attendance_records", "verified_by_faculty", "INTEGER NOT NULL DEFAULT 0")
+        _add_column_if_missing(db, "student_credentials", "file_path", "TEXT")
+        _add_column_if_missing(db, "student_credentials", "original_filename", "TEXT")
         _add_column_if_missing(db, "threads", "scope_type", "TEXT")
         _add_column_if_missing(db, "threads", "batch_id", "TEXT")
         _add_column_if_missing(db, "threads", "subject", "TEXT")

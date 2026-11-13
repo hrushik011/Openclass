@@ -477,3 +477,93 @@
   font-size: 13px;
   padding-right: 2px;
 }
+
+/* My Achievements */
+.achievements-upload-hero {
+  padding: 22px 24px !important;
+  margin-bottom: 18px;
+  border: 1px solid rgba(124, 58, 237, 0.2);
+  background: linear-gradient(145deg, rgba(124, 58, 237, 0.06), transparent);
+}
+
+.achievements-upload-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  margin-bottom: 16px;
+}
+
+.achievements-upload-icon {
+  width: 52px;
+  height: 52px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(124, 58, 237, 0.14);
+  color: #7c3aed;
+  flex-shrink: 0;
+}
+
+.achievements-upload-title {
+  font-size: 18px;
+  font-weight: 800;
+  margin: 0 0 4px;
+  color: var(--oc-text, #0f172a);
+}
+
+.achievements-upload-sub {
+  font-size: 12px;
+  color: var(--oc-muted, #64748b);
+  margin: 0;
+  line-height: 1.45;
+}
+
+.achievements-upload-drop {
+  min-height: 120px;
+  margin-bottom: 14px;
+  position: relative;
+  cursor: pointer;
+}
+
+.achievements-upload-drop input[type="file"] {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.achievements-upload-meta {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+@media (max-width: 640px) {
+  .achievements-upload-meta {
+    grid-template-columns: 1fr;
+  }
+}
+
+.achievements-optional-details {
+  font-size: 11px;
+  color: var(--oc-muted);
+  margin-bottom: 14px;
+}
+
+.achievements-optional-details summary {
+  cursor: pointer;
+  font-weight: 700;
+  color: var(--oc-text);
+}
+
+.achievements-upload-submit {
+  width: 100%;
+  max-width: 320px;
+}
+
+.achievements-secondary-panel {
+  padding: 18px 20px !important;
+  margin-bottom: 18px;
+}
