@@ -433,13 +433,18 @@ html[data-theme="dark"] .reducto-topbar .reducto-brand-name {
   font-weight: 800;
 }
 
-.reducto-topbar {
+.reducto-topbar,
+.oc-topbar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
+  gap: 0.5rem;
   min-height: 64px;
   padding: 10px 20px !important;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
 }
 
 .reducto-brand {
@@ -599,10 +604,23 @@ html[data-theme="dark"] .person-card {
   border-color: var(--oc-border) !important;
 }
 
-.top-actions {
+.top-actions,
+.oc-topbar-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+.command-search {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
+  min-width: 0;
+  box-sizing: border-box;
 }
 
 .login-brand {
@@ -991,8 +1009,19 @@ html[data-theme="dark"] .tt-file-name {
 .dashboard-metrics {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
-  margin: 0 0 16px;
+  gap: 1rem;
+  margin: 0 0 1rem;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.oc-fab-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  box-sizing: border-box;
 }
 
 @media (max-width: 900px) {

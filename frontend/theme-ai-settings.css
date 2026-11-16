@@ -1,15 +1,17 @@
 /* Ask Openclass AI widget, Knowledge Hub converter, Workspace Settings */
 
 .oc-ai-widget {
-  position: fixed;
-  right: 24px;
-  bottom: 24px;
-  z-index: 50;
   display: flex;
   flex-direction: column;
   align-items: flex-end;
   gap: 12px;
+  width: 100%;
   max-width: min(380px, calc(100vw - 32px));
+  box-sizing: border-box;
+}
+
+.oc-workspace-actions .oc-ai-widget {
+  max-width: 100%;
 }
 
 .oc-ai-fab {

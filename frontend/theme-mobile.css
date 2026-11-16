@@ -1,27 +1,79 @@
 /* === Openclass · Mobile layout (max-width: 767px) === */
 
-.w-full {
+.w-full { width: 100%; }
+.max-w-full { max-width: 100%; }
+.box-border { box-sizing: border-box; }
+
+.flex { display: flex; }
+.flex-wrap { flex-wrap: wrap; }
+.flex-col { flex-direction: column; }
+.items-center { align-items: center; }
+.justify-between { justify-content: space-between; }
+.justify-end { justify-content: flex-end; }
+.gap-2 { gap: 0.5rem; }
+.gap-4 { gap: 1rem; }
+.min-w-0 { min-width: 0; }
+.flex-1 { flex: 1 1 0%; }
+
+.oc-page-content,
+.oc-view-stack {
   width: 100%;
-}
-
-.max-w-full {
   max-width: 100%;
-}
-
-.box-border {
   box-sizing: border-box;
 }
 
-.oc-page-content {
-  width: 100%;
-  max-width: 100%;
-  box-sizing: border-box;
-}
-
-.oc-stack-sm {
+.oc-view-stack {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 1rem;
+}
+
+.oc-card-metric {
+  padding: 1rem !important;
+}
+
+.sm\:w-auto {
+  width: auto;
+}
+
+/* --- Desktop: fixed quick-actions dock (no overlap with content padding) --- */
+@media (min-width: 768px) {
+  .oc-workspace-actions {
+    position: fixed;
+    right: 24px;
+    bottom: 24px;
+    z-index: 40;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 12px;
+    width: auto;
+    max-width: min(380px, calc(100vw - 48px));
+    pointer-events: none;
+  }
+
+  .oc-workspace-actions > * {
+    pointer-events: auto;
+  }
+
+  .oc-ai-widget {
+    position: static;
+    right: auto;
+    bottom: auto;
+    width: auto;
+    max-width: min(380px, calc(100vw - 48px));
+  }
+
+  .oc-fab-action {
+    position: static;
+    width: auto;
+    max-width: 280px;
+    white-space: nowrap;
+  }
+
+  .oc-page-content {
+    padding-bottom: 140px;
+  }
 }
 
 @media (max-width: 767px) {
@@ -51,6 +103,8 @@
     min-width: 0;
     flex: 1 1 auto;
     box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
   }
 
   .content,
@@ -61,6 +115,125 @@
     padding-left: 1rem !important;
     padding-right: 1rem !important;
     overflow-x: hidden;
+    padding-bottom: 1rem !important;
+  }
+
+  /* Topbar: wrap / stack */
+  .oc-topbar,
+  .reducto-topbar {
+    display: flex !important;
+    flex-wrap: wrap !important;
+    align-items: center !important;
+    justify-content: space-between !important;
+    gap: 0.5rem !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    box-sizing: border-box !important;
+    height: auto !important;
+    min-height: 56px;
+    padding: 0.75rem 1rem !important;
+  }
+
+  .oc-topbar-start {
+    flex: 1 1 auto;
+    min-width: 0;
+    width: 100%;
+    max-width: 100%;
+  }
+
+  .reducto-topbar .reducto-brand {
+    flex: 1 1 auto;
+    min-width: 0;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .oc-topbar-actions,
+  .top-actions {
+    flex: 1 1 100% !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    flex-wrap: wrap !important;
+    align-items: stretch !important;
+    justify-content: flex-start !important;
+    gap: 0.5rem !important;
+  }
+
+  .command-search {
+    flex: 1 1 100% !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    box-sizing: border-box;
+  }
+
+  .command-search-input {
+    width: 100% !important;
+    min-width: 0 !important;
+  }
+
+  .oc-topbar-trailing {
+    flex: 1 1 100%;
+    width: 100%;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+
+  .topbar-signout-btn {
+    flex: 1 1 auto;
+    justify-content: center;
+    min-height: 40px;
+  }
+
+  .topbar-signout-label {
+    white-space: normal;
+  }
+
+  /* Quick actions in document flow — no fixed overlap */
+  .oc-workspace-actions {
+    position: static !important;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 1rem;
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
+    padding: 0 1rem 1.25rem;
+    margin-top: 0.25rem;
+  }
+
+  .oc-fab-action,
+  #btn-floating-action {
+    position: static !important;
+    right: auto !important;
+    bottom: auto !important;
+    left: auto !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    z-index: auto !important;
+  }
+
+  .oc-ai-widget {
+    position: static !important;
+    right: auto !important;
+    bottom: auto !important;
+    left: auto !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    align-items: stretch !important;
+    z-index: auto !important;
+  }
+
+  .oc-ai-fab {
+    width: 100% !important;
+    justify-content: center;
+  }
+
+  .oc-ai-panel {
+    width: 100% !important;
+    max-width: 100% !important;
+    max-height: min(60vh, 420px);
   }
 
   .knowledge-hub-view,
@@ -82,6 +255,7 @@
   .achievements-upload-hero,
   .management-card,
   .metric-card,
+  .class-card,
   .modal,
   .modal-card {
     width: 100%;
@@ -89,10 +263,37 @@
     box-sizing: border-box;
   }
 
+  .class-card,
+  .metric-card.oc-card-metric {
+    display: flex;
+    flex-direction: column;
+    padding: 1rem !important;
+    gap: 0.75rem;
+  }
+
+  .class-right {
+    width: 100%;
+    max-width: 100%;
+  }
+
+  .dashboard-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    width: 100%;
+    max-width: 100%;
+  }
+
+  .dashboard-metrics,
+  .dashboard-grid,
+  .faculty-grid {
+    gap: 1rem !important;
+  }
+
   .hero-row {
     flex-direction: column !important;
     align-items: flex-start !important;
-    gap: 12px !important;
+    gap: 0.75rem !important;
     width: 100%;
     max-width: 100%;
   }
@@ -109,46 +310,13 @@
   .credential-card-title,
   .hub-meta-item,
   .date-note,
-  .topbar-greeting {
+  .topbar-greeting,
+  .reducto-brand-name {
     white-space: normal !important;
     overflow-wrap: anywhere;
     word-break: break-word;
   }
 
-  .reducto-topbar {
-    flex-wrap: wrap;
-    gap: 10px;
-    padding: 10px 1rem !important;
-    width: 100%;
-    max-width: 100%;
-    box-sizing: border-box;
-  }
-
-  .reducto-topbar .reducto-brand {
-    flex: 1 1 auto;
-    min-width: 0;
-    min-width: unset;
-  }
-
-  .top-actions {
-    flex: 1 1 100%;
-    width: 100%;
-    justify-content: flex-end;
-    flex-wrap: wrap;
-    gap: 8px;
-  }
-
-  .command-search-input {
-    width: 100% !important;
-    min-width: 0 !important;
-  }
-
-  .command-search {
-    flex: 1 1 100%;
-    min-width: 0;
-  }
-
-  /* Sidebar drawer */
   .sidebar {
     position: fixed !important;
     top: 0;
@@ -195,14 +363,8 @@
     flex-shrink: 0;
   }
 
-  .oc-mobile-nav-btn svg {
-    display: block;
-  }
-
-  /* Stack filter / converter rows */
   .hub-converter-row,
   .credential-url-row,
-  .notes-filter-bar > div[style*="justify-content"],
   .achievements-upload-meta,
   .modal-actions--submit,
   .integration-sync-grid,
@@ -211,55 +373,34 @@
     display: flex !important;
     width: 100%;
     max-width: 100%;
+    gap: 1rem !important;
   }
 
   .hub-converter-row {
     display: grid !important;
     grid-template-columns: 1fr !important;
-  }
-
-  .hub-converter-actions,
-  .hub-convert-drop,
-  .achievements-upload-drop {
-    width: 100%;
-    max-width: 100%;
-  }
-
-  .hub-results-count {
-    white-space: normal !important;
-    width: 100%;
-  }
-
-  #notes-subject-filters {
-    width: 100%;
-    max-width: 100%;
+    gap: 1rem !important;
   }
 
   .knowledge-hub-grid {
     grid-template-columns: 1fr !important;
     width: 100%;
     max-width: 100%;
+    gap: 1rem;
   }
 
-  .hub-resource-card {
-    width: 100%;
-    max-width: 100%;
-    min-width: 0;
-  }
-
-  /* Primary / action buttons — thumb-friendly */
   .content .primary-btn,
-  .content .secondary-btn:not(.mini-btn):not(.icon-btn):not(.nav-item),
+  .content .secondary-btn:not(.mini-btn):not(.icon-btn):not(.nav-item):not(.theme-toggle-btn),
   .modal .primary-btn,
   .modal .secondary-btn:not(.mini-btn),
-  #btn-floating-action,
   .achievements-upload-submit,
   .hub-converter-actions .primary-btn,
   #btn-hub-convert,
   #btn-certificate-upload,
   #btn-credential-ingest,
   .integration-sync-actions .primary-btn,
-  .integration-sync-actions .secondary-btn {
+  .integration-sync-actions .secondary-btn,
+  .class-card .meet-btn {
     width: 100% !important;
     max-width: 100% !important;
     justify-content: center;
@@ -269,35 +410,12 @@
   .modal-actions--submit .modal-actions-start {
     width: 100%;
     flex-direction: column;
+    gap: 0.5rem;
   }
 
   .modal-actions--submit #btn-cancel-modal,
   .submit-convert-btn {
     width: 100% !important;
-  }
-
-  /* Floating widgets — keep on-screen */
-  #btn-floating-action {
-    left: 1rem;
-    right: 1rem;
-    width: calc(100% - 2rem) !important;
-    bottom: 5.5rem;
-  }
-
-  .oc-ai-widget {
-    right: 1rem;
-    left: 1rem;
-    max-width: calc(100vw - 2rem);
-    align-items: stretch;
-  }
-
-  .oc-ai-fab {
-    align-self: flex-end;
-  }
-
-  .oc-ai-panel {
-    width: 100%;
-    max-width: 100%;
   }
 
   .person-card {
@@ -317,18 +435,18 @@
     word-break: break-word;
   }
 
-  .faculty-grid,
-  .batch-grid,
   .dashboard-metrics {
     grid-template-columns: 1fr !important;
   }
 
-  .table-scroll,
-  .panel[style*="overflow: auto"],
-  .panel[style*="overflow-x"] {
+  .table-scroll {
     overflow-x: auto;
     -webkit-overflow-scrolling: touch;
     max-width: 100%;
+  }
+
+  .sm\:w-auto {
+    width: 100% !important;
   }
 }
 
@@ -339,5 +457,20 @@
 
   .sidebar-backdrop {
     display: none !important;
+  }
+
+  .oc-topbar,
+  .reducto-topbar {
+    flex-wrap: nowrap;
+  }
+
+  .oc-topbar-actions {
+    flex: 0 1 auto;
+    width: auto;
+  }
+
+  .command-search {
+    min-width: 160px;
+    max-width: 280px;
   }
 }

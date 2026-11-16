@@ -320,11 +320,11 @@
 
   function renderDashboardMetrics(items) {
     return `
-      <div class="dashboard-metrics" role="list">
+      <div class="dashboard-metrics w-full max-w-full box-border gap-4" role="list">
         ${(items || [])
           .map(
             (m) => `
-          <div class="metric-card panel" role="listitem">
+          <div class="metric-card panel oc-card-metric flex flex-col w-full max-w-full box-border" role="listitem">
             <div class="metric-icon" aria-hidden="true">${getIcon(m.icon, 17)}</div>
             <div class="metric-copy">
               <span class="metric-label">${m.label}</span>
@@ -2296,18 +2296,20 @@
         <!-- Main Body -->
         <main class="main w-full max-w-full box-border">
           <!-- Topbar -->
-          <header class="topbar reducto-topbar w-full max-w-full box-border">
-            <button type="button" class="mobile-menu oc-mobile-nav-btn" id="btn-mobile-nav" aria-label="Open navigation menu" aria-expanded="${state.mobileNavOpen}">
-              ${getIcon("menu", 18)}
-            </button>
-            <div class="reducto-brand">
-              ${renderOpenclassLogo(40, "oc-logo-topbar")}
-              <span class="reducto-brand-name">Openclass</span>
-              ${!isFaculty ? `<span class="topbar-greeting">${personalizedGreeting(user)}</span>` : ""}
+          <header class="topbar reducto-topbar oc-topbar flex flex-wrap items-center justify-between gap-2 w-full max-w-full box-border">
+            <div class="oc-topbar-start flex flex-wrap items-center gap-2 min-w-0 flex-1 box-border">
+              <button type="button" class="mobile-menu oc-mobile-nav-btn" id="btn-mobile-nav" aria-label="Open navigation menu" aria-expanded="${state.mobileNavOpen}">
+                ${getIcon("menu", 18)}
+              </button>
+              <div class="reducto-brand min-w-0">
+                ${renderOpenclassLogo(40, "oc-logo-topbar")}
+                <span class="reducto-brand-name">Openclass</span>
+                ${!isFaculty ? `<span class="topbar-greeting">${personalizedGreeting(user)}</span>` : ""}
+              </div>
             </div>
 
-            <div class="top-actions">
-              <div class="command-search">
+            <div class="top-actions oc-topbar-actions flex flex-wrap items-center justify-end gap-2 w-full max-w-full box-border">
+              <div class="command-search flex-1 min-w-0 w-full sm:w-auto box-border">
                 ${getIcon("search", 13)}
                 <input
                   type="text"
@@ -2319,30 +2321,34 @@
                 />
               </div>
 
-              <button type="button" class="theme-toggle-btn" id="btn-theme-toggle" title="Toggle theme" aria-label="Toggle theme">
-                ${state.theme === "dark" ? getIcon("sun", 15) : getIcon("moon", 15)}
-              </button>
+              <div class="oc-topbar-trailing flex flex-wrap items-center gap-2">
+                <button type="button" class="theme-toggle-btn" id="btn-theme-toggle" title="Toggle theme" aria-label="Toggle theme">
+                  ${state.theme === "dark" ? getIcon("sun", 15) : getIcon("moon", 15)}
+                </button>
 
-              <div class="avatar" title="${user.name} (${user.role})">${initials}</div>
+                <div class="avatar" title="${user.name} (${user.role})">${initials}</div>
 
-              <button class="topbar-signout-btn" id="btn-topbar-signout" title="Sign out of Openclass">
-                ${getIcon("logout", 13)}
-                <span>Sign Out</span>
-              </button>
+                <button class="topbar-signout-btn" id="btn-topbar-signout" title="Sign out of Openclass">
+                  ${getIcon("logout", 13)}
+                  <span class="topbar-signout-label">Sign Out</span>
+                </button>
+              </div>
             </div>
           </header>
 
           <!-- Dynamic Content -->
-          <div class="content oc-page-content w-full max-w-full box-border">
+          <div class="content oc-page-content w-full max-w-full box-border oc-view-stack">
             ${renderTabContent()}
           </div>
-        </main>
 
-        <!-- Floating Action Button -->
-        <button class="primary-btn oc-fab-action" id="btn-floating-action" style="position: fixed; right: 28px; bottom: 96px; z-index: 24;">
-          ${isActualFaculty ? getIcon("video", 14) : getIcon("plus", 14)}
-          ${isActualFaculty ? "Schedule sudden class" : "Start new thread"}
-        </button>
+          <div class="oc-workspace-actions w-full max-w-full box-border" aria-label="Quick actions">
+            <button type="button" class="primary-btn oc-fab-action" id="btn-floating-action">
+              ${isActualFaculty ? getIcon("video", 14) : getIcon("plus", 14)}
+              ${isActualFaculty ? "Schedule sudden class" : "Start new thread"}
+            </button>
+            ${renderFloatingAiWidget()}
+          </div>
+        </main>
       </div>
 
       <!-- Active Modal -->
@@ -2350,7 +2356,6 @@
 
       <!-- Success / Alert Toast -->
       ${renderToast()}
-      ${renderFloatingAiWidget()}
     `;
   }
 
@@ -2359,7 +2364,7 @@
     const mode = state.aiMode || "study";
     const messages = state.aiMessages || [];
     return `
-      <div class="oc-ai-widget${open ? " open" : ""}" id="oc-ai-widget">
+      <div class="oc-ai-widget w-full max-w-full box-border${open ? " open" : ""}" id="oc-ai-widget">
         ${open ? `
           <motionless class="oc-ai-panel panel">
             <div class="oc-ai-head">
@@ -2560,7 +2565,7 @@
       : (roster.ingested ? `${roster.session_count || state.classes.length} persisted sessions` : "No roster ingested yet");
 
     return `
-      <div class="faculty-view">
+      <div class="faculty-view oc-view-stack w-full max-w-full box-border">
         <div class="hero-row">
           <div>
             <div class="eyebrow">Faculty Portal · Live Academic Control</div>
@@ -2858,7 +2863,7 @@
   function renderStudentAttendanceView() {
     const user = state.user || {};
     return `
-      <div class="student-view">
+      <div class="student-view oc-view-stack w-full max-w-full box-border">
         <div class="hero-row">
           <div>
             <div class="eyebrow">Student Portal · Attendance</div>
@@ -2885,7 +2890,7 @@
     const overallColors = attendanceBarColors(avg == null ? 0 : avg);
 
     return `
-      <div class="faculty-view attendance-analytics-view">
+      <div class="faculty-view attendance-analytics-view oc-view-stack w-full max-w-full box-border">
         <div class="hero-row">
           <div>
             <div class="eyebrow">Faculty Analytics · Institutional Report</div>
@@ -3164,7 +3169,7 @@
     const graphThread = pickAnnouncementThread(state.threads);
 
     return `
-      <div class="student-view">
+      <div class="student-view oc-view-stack w-full max-w-full box-border">
         <div class="hero-row">
           <div>
             <div class="eyebrow">Student Portal</div>
