@@ -114,7 +114,7 @@ from .services.roster import (
     persist_student_roster,
     apply_ingested_student_profile,
     rebuild_faculty_subject_batches,
-    roster_status,
+    roster_status, 
     session_visible_to_user,
     student_enrollments,
     list_student_class_sessions,
@@ -128,7 +128,7 @@ from .timetable_engine import (
     ingest_master_data,
     ingest_time_table,
     resolve_student,
-    roster_people_for_persist,
+    roster_people_for_persist, 
     subscriptions_for_user,
     todays_rhythm,
 )

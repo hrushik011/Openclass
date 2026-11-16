@@ -15,3 +15,4 @@ What are the things that our app need rightnow.
 - Running its own video platform to conduct classes add very and only essentail feature revolving around students, university and classes that too with very less "friction" thats the goal.
 - Create an ecosysytem around this class online learning/ Universities for with minimal friction and easy to use software and has less learing curve.
 Too considarate
+-What is the current progression towards the mobile version does all the features work

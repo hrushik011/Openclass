@@ -66,6 +66,7 @@
     integrationSyncBusy: null,
     certificateUploadBusy: false,
     certificateFileName: "",
+    mobileNavOpen: false,
     workspaceSettings: (() => {
       try {
         const raw = localStorage.getItem("openclass_workspace_settings");
@@ -707,7 +708,8 @@
       shield: `<svg width="${s}" height="${s}" class="${className}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>`,
       fileText: `<svg width="${s}" height="${s}" class="${className}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>`,
       attendance: `<svg width="${s}" height="${s}" class="${className}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"></path><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path></svg>`,
-      trophy: `<svg width="${s}" height="${s}" class="${className}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 21h8"></path><path d="M12 17v4"></path><path d="M7 4h10v5a5 5 0 0 1-10 0V4z"></path><path d="M5 4H3v2a4 4 0 0 0 4 4"></path><path d="M19 4h2v2a4 4 0 0 1-4 4"></path></svg>`
+      trophy: `<svg width="${s}" height="${s}" class="${className}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 21h8"></path><path d="M12 17v4"></path><path d="M7 4h10v5a5 5 0 0 1-10 0V4z"></path><path d="M5 4H3v2a4 4 0 0 0 4 4"></path><path d="M19 4h2v2a4 4 0 0 1-4 4"></path></svg>`,
+      menu: `<svg width="${s}" height="${s}" class="${className}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>`
     };
     return icons[name] || "";
   }
@@ -1694,9 +1696,24 @@
       }
       .knowledge-hub-grid {
         display: grid;
-        grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
+        grid-template-columns: repeat(auto-fill, minmax(min(100%, 260px), 1fr));
         gap: 16px;
         margin-top: 16px;
+        width: 100%;
+        max-width: 100%;
+        box-sizing: border-box;
+      }
+      @media (max-width: 767px) {
+        .knowledge-hub-grid {
+          grid-template-columns: 1fr;
+        }
+        .notes-filter-bar > div[style*="flex-wrap"] {
+          flex-direction: column !important;
+          align-items: stretch !important;
+        }
+        .hub-results-count {
+          white-space: normal !important;
+        }
       }
       .hub-resource-card {
         background: linear-gradient(145deg, #1f1d2f, #151322);
@@ -2223,10 +2240,11 @@
     }
 
     return `
-      <div class="shell">
+      <div class="shell w-full max-w-full box-border">
         ${renderAtmosphereBackdrop()}
+        <div class="sidebar-backdrop${state.mobileNavOpen ? " visible" : ""}" id="sidebar-backdrop" aria-hidden="true"></div>
         <!-- Sidebar -->
-        <aside class="sidebar">
+        <aside class="sidebar${state.mobileNavOpen ? " open" : ""}" id="app-sidebar" aria-label="Main navigation">
           <div class="sidebar-logo-wrap">
             ${renderOpenclassLogo(40, "oc-logo-sidebar")}
             <span class="sidebar-brand-name">Openclass</span>
@@ -2276,9 +2294,12 @@
         </aside>
 
         <!-- Main Body -->
-        <main class="main">
+        <main class="main w-full max-w-full box-border">
           <!-- Topbar -->
-          <header class="topbar reducto-topbar">
+          <header class="topbar reducto-topbar w-full max-w-full box-border">
+            <button type="button" class="mobile-menu oc-mobile-nav-btn" id="btn-mobile-nav" aria-label="Open navigation menu" aria-expanded="${state.mobileNavOpen}">
+              ${getIcon("menu", 18)}
+            </button>
             <div class="reducto-brand">
               ${renderOpenclassLogo(40, "oc-logo-topbar")}
               <span class="reducto-brand-name">Openclass</span>
@@ -2293,7 +2314,8 @@
                   id="knowledge-search"
                   placeholder="${isFaculty ? "Search classes & rosters" : "Search your knowledge"}"
                   value="${state.filterSearch}"
-                  style="background: transparent; border: 0; color: inherit; font-size: 12px; outline: none; width: 180px;"
+                  class="command-search-input"
+                  style="background: transparent; border: 0; color: inherit; font-size: 12px; outline: none; flex: 1; min-width: 0; width: 100%;"
                 />
               </div>
 
@@ -2311,13 +2333,13 @@
           </header>
 
           <!-- Dynamic Content -->
-          <div class="content">
+          <div class="content oc-page-content w-full max-w-full box-border">
             ${renderTabContent()}
           </div>
         </main>
 
         <!-- Floating Action Button -->
-        <button class="primary-btn" id="btn-floating-action" style="position: fixed; right: 28px; bottom: 96px; z-index: 24;">
+        <button class="primary-btn oc-fab-action" id="btn-floating-action" style="position: fixed; right: 28px; bottom: 96px; z-index: 24;">
           ${isActualFaculty ? getIcon("video", 14) : getIcon("plus", 14)}
           ${isActualFaculty ? "Schedule sudden class" : "Start new thread"}
         </button>
@@ -3376,7 +3398,7 @@
       { id: "github", label: "GitHub", hint: "Personal access token (repo read)" },
     ];
     return `
-      <div class="achievements-view">
+      <div class="achievements-view w-full max-w-full box-border">
         <div class="hero-row">
           <div>
             <div class="eyebrow">Student Portfolio</div>
@@ -3495,7 +3517,7 @@
     const filtered = filteredStudentNotes();
 
     return `
-      <div class="knowledge-hub-view">
+      <div class="knowledge-hub-view w-full max-w-full box-border">
         <div class="hero-row">
           <div>
             <div class="eyebrow">Course Repository · Academic Library</div>
@@ -3507,7 +3529,7 @@
           </div>
         </div>
 
-        <section class="panel hub-filter-panel" style="margin-bottom: 20px; padding: 18px 20px;">
+        <section class="panel hub-filter-panel w-full max-w-full box-border" style="margin-bottom: 20px; padding: 18px 20px;">
           <div class="notes-filter-bar" style="margin: 0; padding: 0; background: transparent; border: 0;">
             <div class="notes-search-wrap">
               ${getIcon("search", 15)}
@@ -3540,7 +3562,7 @@
           </div>
         </section>
 
-        <section class="panel hub-converter-card" id="hub-file-converter" style="margin-bottom: 20px; padding: 18px 20px;">
+        <section class="panel hub-converter-card w-full max-w-full box-border" id="hub-file-converter" style="margin-bottom: 20px; padding: 18px 20px;">
           <div class="panel-head" style="padding: 0 0 12px; margin: 0;">
             <div class="panel-title">${getIcon("fileText", 15)} File Converter (.docx ↔ .pdf)</div>
             <span class="panel-meta">Secure server-side conversion</span>
@@ -3777,7 +3799,7 @@
         </div>
 
         ${classes.length ? `
-        <section class="panel" style="margin-top: 16px; overflow: auto;">
+        <section class="panel table-scroll" style="margin-top: 16px; overflow-x: auto;">
           <table style="width: 100%; border-collapse: collapse; min-width: 720px;">
             <thead>
               <tr>
@@ -4571,13 +4593,39 @@
   }
 
   // --- 10. Workspace Event Bindings ---
+  function closeMobileNav() {
+    if (state.mobileNavOpen) {
+      state.mobileNavOpen = false;
+      render();
+    }
+  }
+
   function bindWorkspaceEvents() {
+    const btnMobileNav = document.getElementById("btn-mobile-nav");
+    if (btnMobileNav) {
+      btnMobileNav.addEventListener("click", () => {
+        state.mobileNavOpen = !state.mobileNavOpen;
+        render();
+      });
+    }
+    const sidebarBackdrop = document.getElementById("sidebar-backdrop");
+    if (sidebarBackdrop) {
+      sidebarBackdrop.addEventListener("click", closeMobileNav);
+    }
+    if (!window.__ocMobileNavResizeBound) {
+      window.__ocMobileNavResizeBound = true;
+      window.addEventListener("resize", () => {
+        if (window.innerWidth >= 768) closeMobileNav();
+      });
+    }
+
     // Navigation Tabs
     document.querySelectorAll(".nav-item").forEach((btn) => {
       btn.addEventListener("click", () => {
         const tab = btn.dataset.tab;
         if (tab) {
           state.currentTab = tab;
+          closeMobileNav();
           if (tab === "my-achievements" || tab === "My Achievements") {
             api.loadCredentials().then(() => render());
             return;

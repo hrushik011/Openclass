@@ -14,7 +14,7 @@ IST = ZoneInfo("Asia/Kolkata")
 
 _resend_key = os.getenv("RESEND_API_KEY")
 if _resend_key:
-    resend.api_key = _resend_key
+    resend.api_key = _resend_key 
 
 # Resend tag `category` values for inbox filtering / analytics
 CATEGORY_LIVE_CLASS = "live_class_alert"

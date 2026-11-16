@@ -472,6 +472,18 @@ html[data-theme="dark"] .reducto-topbar .reducto-brand-name {
   white-space: nowrap;
 }
 
+.shell > .main {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.content {
+  box-sizing: border-box;
+  max-width: 100%;
+}
+
 html[data-theme="dark"] .reducto-brand-name {
   color: #f8fafc;
 }

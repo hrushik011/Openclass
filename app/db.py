@@ -99,7 +99,7 @@ CREATE TABLE IF NOT EXISTS assignments (
     description TEXT,
     subject TEXT,
     subject_id TEXT,
-    batch_id TEXT NOT NULL,
+    batch_id TEXT NOT NULL, 
     deadline TEXT NOT NULL,
     faculty_id INTEGER,
     faculty_name TEXT,
