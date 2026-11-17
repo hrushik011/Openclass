@@ -2202,6 +2202,16 @@
     });
   }
 
+  function shouldShowThreadQuickAction() {
+    const userRole = String((state.user && state.user.role) || "STUDENT").toUpperCase();
+    const tab = state.currentTab;
+    if (userRole === "FACULTY") {
+      return tab === "Dashboard";
+    }
+    const threadTabs = new Set(["Dashboard", "Class Threads"]);
+    return threadTabs.has(tab);
+  }
+
   // --- 2. Main Workspace Layout ---
   function renderWorkspace() {
     const user = state.user || {};
@@ -2239,8 +2249,10 @@
       state.currentTab = "Dashboard";
     }
 
+    const showThreadQuickAction = shouldShowThreadQuickAction();
+
     return `
-      <div class="shell w-full max-w-full box-border">
+      <div class="shell w-full max-w-full box-border${showThreadQuickAction ? " oc-has-thread-fab" : ""}">
         ${renderAtmosphereBackdrop()}
         <div class="sidebar-backdrop oc-drawer-backdrop z-40${state.mobileNavOpen ? " visible" : ""}" id="sidebar-backdrop" aria-hidden="${state.mobileNavOpen ? "false" : "true"}"></div>
         <!-- Sidebar -->
@@ -2345,11 +2357,13 @@
             ${renderTabContent()}
           </div>
 
-          <div class="oc-workspace-actions w-full max-w-full box-border" aria-label="Quick actions">
-            <button type="button" class="primary-btn oc-fab-action" id="btn-floating-action">
-              ${isActualFaculty ? getIcon("video", 14) : getIcon("plus", 14)}
-              ${isActualFaculty ? "Schedule sudden class" : "Start new thread"}
-            </button>
+          <div class="oc-workspace-actions w-full max-w-full box-border${showThreadQuickAction ? "" : " oc-workspace-actions--ai-only"}" aria-label="Quick actions">
+            ${showThreadQuickAction ? `
+              <button type="button" class="primary-btn oc-fab-action" id="btn-floating-action">
+                ${isActualFaculty ? getIcon("video", 14) : getIcon("plus", 14)}
+                ${isActualFaculty ? "Schedule sudden class" : "Start new thread"}
+              </button>
+            ` : ""}
             ${renderFloatingAiWidget()}
           </div>
         </main>
