@@ -2242,15 +2242,19 @@
     return `
       <div class="shell w-full max-w-full box-border">
         ${renderAtmosphereBackdrop()}
-        <div class="sidebar-backdrop${state.mobileNavOpen ? " visible" : ""}" id="sidebar-backdrop" aria-hidden="true"></div>
+        <div class="sidebar-backdrop oc-drawer-backdrop z-40${state.mobileNavOpen ? " visible" : ""}" id="sidebar-backdrop" aria-hidden="${state.mobileNavOpen ? "false" : "true"}"></div>
         <!-- Sidebar -->
-        <aside class="sidebar${state.mobileNavOpen ? " open" : ""}" id="app-sidebar" aria-label="Main navigation">
+        <aside
+          class="sidebar oc-mobile-drawer z-50${state.mobileNavOpen ? " open translate-x-0" : ""}"
+          id="app-sidebar"
+          aria-label="Main navigation"
+        >
           <div class="sidebar-logo-wrap">
             ${renderOpenclassLogo(40, "oc-logo-sidebar")}
             <span class="sidebar-brand-name">Openclass</span>
           </div>
           <div class="nav-label">Workspace</div>
-          <nav class="nav-list" aria-label="workspace navigation">
+          <nav class="nav-list oc-drawer-nav flex flex-col" aria-label="workspace navigation">
             ${navItems
         .map(
           (item) => {
@@ -4598,9 +4602,15 @@
   }
 
   // --- 10. Workspace Event Bindings ---
+  function syncMobileNavBodyLock() {
+    if (typeof document === "undefined") return;
+    document.body.classList.toggle("oc-mobile-nav-open", !!state.mobileNavOpen);
+  }
+
   function closeMobileNav() {
     if (state.mobileNavOpen) {
       state.mobileNavOpen = false;
+      syncMobileNavBodyLock();
       render();
     }
   }
@@ -4610,6 +4620,7 @@
     if (btnMobileNav) {
       btnMobileNav.addEventListener("click", () => {
         state.mobileNavOpen = !state.mobileNavOpen;
+        syncMobileNavBodyLock();
         render();
       });
     }

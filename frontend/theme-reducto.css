@@ -333,10 +333,21 @@ html[data-theme="dark"] .oc-atmosphere {
   background-position: 55% 30%;
 }
 
-.shell .sidebar,
 .shell > .main {
   position: relative;
   z-index: 1;
+}
+
+.shell .sidebar {
+  position: relative;
+  z-index: 1;
+}
+
+@media (max-width: 767px) {
+  .shell .sidebar.oc-mobile-drawer {
+    position: fixed !important;
+    z-index: 50 !important;
+  }
 }
 
 html[data-theme="dark"] .shell > .main {
